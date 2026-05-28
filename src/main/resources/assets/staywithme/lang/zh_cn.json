@@ -1,0 +1,23 @@
+{
+  "entity.staywithme.friend": "伙伴",
+  "item.staywithme.friend_spawn_egg": "伙伴刷怪蛋",
+  "key.categories.staywithme": "Stay With Me",
+  "key.staywithme.open_llm_config": "打开 API 配置",
+  "commands.staywithme.spawned": "已生成伙伴。",
+  "commands.staywithme.no_friend": "附近没有找到伙伴。",
+  "commands.staywithme.follow": "伙伴正在跟随你。",
+  "commands.staywithme.stop": "伙伴已停止。",
+  "commands.staywithme.crafttable": "伙伴正在制作并放置工作台。",
+  "commands.staywithme.sticks": "伙伴正在制作木棍。",
+  "commands.staywithme.chest": "伙伴正在制作箱子。",
+  "commands.staywithme.woodenaxe": "伙伴正在制作木斧。",
+  "commands.staywithme.woodenpickaxe": "伙伴正在制作木镐。",
+  "commands.staywithme.stonepickaxe": "伙伴正在制作石镐。",
+  "commands.staywithme.furnace": "伙伴正在制作熔炉。",
+  "commands.staywithme.ironingot": "伙伴正在获取铁锭。",
+  "commands.staywithme.ironpickaxe": "伙伴正在制作铁镐。",
+  "commands.staywithme.mine": "伙伴正在采集 %s x%s。",
+  "commands.staywithme.craftitem": "伙伴正在制作 %s x%s。",
+  "commands.staywithme.status": "伙伴状态：%s",
+  "commands.staywithme.ask": "伙伴计划：%s"
+}

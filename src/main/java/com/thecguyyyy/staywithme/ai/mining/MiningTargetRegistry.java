@@ -1,0 +1,166 @@
+package com.thecguyyyy.staywithme.ai.mining;
+
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Predicate;
+
+public final class MiningTargetRegistry {
+    private static final Map<String, MiningTarget> TARGETS = new LinkedHashMap<>();
+
+    static {
+        register(new MiningTarget(
+                "minecraft:cobblestone",
+                "cobblestone",
+                stack -> stack.is(Items.COBBLESTONE),
+                "wooden pickaxe or better",
+                ToolRequirement.WOODEN_PICKAXE,
+                Blocks.STONE,
+                Blocks.COBBLESTONE
+        ));
+        register(new MiningTarget(
+                "minecraft:coal",
+                "coal",
+                stack -> stack.is(Items.COAL),
+                "wooden pickaxe or better",
+                ToolRequirement.WOODEN_PICKAXE,
+                Blocks.COAL_ORE,
+                Blocks.DEEPSLATE_COAL_ORE
+        ));
+        register(new MiningTarget(
+                "minecraft:raw_iron",
+                "raw iron",
+                stack -> stack.is(Items.RAW_IRON),
+                "stone pickaxe or better",
+                ToolRequirement.STONE_PICKAXE,
+                Blocks.IRON_ORE,
+                Blocks.DEEPSLATE_IRON_ORE
+        ));
+        registerAlias("minecraft:iron_ore", "minecraft:raw_iron");
+        register(new MiningTarget(
+                "minecraft:diamond",
+                "diamond",
+                stack -> stack.is(Items.DIAMOND),
+                "iron pickaxe or better",
+                ToolRequirement.IRON_PICKAXE,
+                Blocks.DIAMOND_ORE,
+                Blocks.DEEPSLATE_DIAMOND_ORE
+        ));
+        register(new MiningTarget(
+                "minecraft:lapis_lazuli",
+                "lapis lazuli",
+                stack -> stack.is(Items.LAPIS_LAZULI),
+                "stone pickaxe or better",
+                ToolRequirement.STONE_PICKAXE,
+                Blocks.LAPIS_ORE,
+                Blocks.DEEPSLATE_LAPIS_ORE
+        ));
+        registerAlias("minecraft:lapis", "minecraft:lapis_lazuli");
+        register(new MiningTarget(
+                "minecraft:redstone",
+                "redstone",
+                stack -> stack.is(Items.REDSTONE),
+                "iron pickaxe or better",
+                ToolRequirement.IRON_PICKAXE,
+                Blocks.REDSTONE_ORE,
+                Blocks.DEEPSLATE_REDSTONE_ORE
+        ));
+        register(new MiningTarget(
+                "minecraft:raw_gold",
+                "raw gold",
+                stack -> stack.is(Items.RAW_GOLD),
+                "iron pickaxe or better",
+                ToolRequirement.IRON_PICKAXE,
+                Blocks.GOLD_ORE,
+                Blocks.DEEPSLATE_GOLD_ORE
+        ));
+        registerAlias("minecraft:gold_ore", "minecraft:raw_gold");
+        register(new MiningTarget(
+                "minecraft:emerald",
+                "emerald",
+                stack -> stack.is(Items.EMERALD),
+                "iron pickaxe or better",
+                ToolRequirement.IRON_PICKAXE,
+                Blocks.EMERALD_ORE,
+                Blocks.DEEPSLATE_EMERALD_ORE
+        ));
+        register(new MiningTarget(
+                "minecraft:raw_copper",
+                "raw copper",
+                stack -> stack.is(Items.RAW_COPPER),
+                "stone pickaxe or better",
+                ToolRequirement.STONE_PICKAXE,
+                Blocks.COPPER_ORE,
+                Blocks.DEEPSLATE_COPPER_ORE
+        ));
+        registerAlias("minecraft:copper_ore", "minecraft:raw_copper");
+        register(new MiningTarget(
+                "minecraft:quartz",
+                "nether quartz",
+                stack -> stack.is(Items.QUARTZ),
+                "wooden pickaxe or better",
+                ToolRequirement.WOODEN_PICKAXE,
+                Blocks.NETHER_QUARTZ_ORE
+        ));
+    }
+
+    private MiningTargetRegistry() {
+    }
+
+    public static Optional<MiningTarget> find(String rawResourceId) {
+        String normalized = normalize(rawResourceId);
+        if (normalized.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(TARGETS.get(normalized));
+    }
+
+    public static String normalize(String rawResourceId) {
+        if (rawResourceId == null) {
+            return "";
+        }
+        String trimmed = rawResourceId.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        if (trimmed.isBlank()) {
+            return "";
+        }
+        return trimmed.contains(":") ? trimmed : "minecraft:" + trimmed;
+    }
+
+    public static String supportedTargetsSummary() {
+        return String.join(", ", TARGETS.keySet());
+    }
+
+    private static void register(MiningTarget target) {
+        TARGETS.put(target.resourceId(), target);
+    }
+
+    private static void registerAlias(String alias, String targetId) {
+        MiningTarget target = TARGETS.get(targetId);
+        if (target != null) {
+            TARGETS.put(alias, target);
+        }
+    }
+
+    public record MiningTarget(
+            String resourceId,
+            String displayName,
+            Predicate<ItemStack> inventoryMatcher,
+            String requiredToolHint,
+            ToolRequirement toolRequirement,
+            Block... sourceBlocks
+    ) {
+    }
+
+    public enum ToolRequirement {
+        NONE,
+        WOODEN_PICKAXE,
+        STONE_PICKAXE,
+        IRON_PICKAXE
+    }
+}

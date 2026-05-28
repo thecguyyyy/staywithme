@@ -1,0 +1,23 @@
+{
+  "entity.staywithme.friend": "Companion",
+  "item.staywithme.friend_spawn_egg": "Companion Spawn Egg",
+  "key.categories.staywithme": "Stay With Me",
+  "key.staywithme.open_llm_config": "Open API Config",
+  "commands.staywithme.spawned": "Companion spawned.",
+  "commands.staywithme.no_friend": "No nearby companion found.",
+  "commands.staywithme.follow": "Companion is following you.",
+  "commands.staywithme.stop": "Companion stopped.",
+  "commands.staywithme.crafttable": "Companion is making and placing a crafting table.",
+  "commands.staywithme.sticks": "Companion is making sticks.",
+  "commands.staywithme.chest": "Companion is making a chest.",
+  "commands.staywithme.woodenaxe": "Companion is making a wooden axe.",
+  "commands.staywithme.woodenpickaxe": "Companion is making a wooden pickaxe.",
+  "commands.staywithme.stonepickaxe": "Companion is making a stone pickaxe.",
+  "commands.staywithme.furnace": "Companion is making a furnace.",
+  "commands.staywithme.ironingot": "Companion is getting an iron ingot.",
+  "commands.staywithme.ironpickaxe": "Companion is making an iron pickaxe.",
+  "commands.staywithme.mine": "Companion is mining %s x%s.",
+  "commands.staywithme.craftitem": "Companion is crafting %s x%s.",
+  "commands.staywithme.status": "Companion status: %s",
+  "commands.staywithme.ask": "Companion planned: %s"
+}

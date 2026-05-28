@@ -1,0 +1,23 @@
+package com.thecguyyyy.staywithme.ai;
+
+public enum FriendTaskType {
+    FOLLOW_PLAYER,
+    STOP,
+    SAY,
+    COLLECT_WOOD,
+    CRAFT_ITEM,
+    MAKE_CRAFTING_TABLE,
+    MAKE_STICKS,
+    MAKE_CHEST,
+    MAKE_WOODEN_AXE,
+    MAKE_WOODEN_PICKAXE,
+    MAKE_STONE_PICKAXE,
+    MAKE_FURNACE,
+    MAKE_IRON_INGOT,
+    MAKE_IRON_PICKAXE,
+    MINE_RESOURCE,
+    MINING_EXPEDITION,
+    ATTACK_NEARBY_HOSTILE,
+    RETURN_TO_PLAYER,
+    UNKNOWN
+}
