@@ -72,8 +72,17 @@ public class LocalBehaviorController {
     private static final float EXPEDITION_RECOVERED_HEALTH_RATIO = 0.75F;
     private static final int EXPEDITION_RECOVERY_TIMEOUT_TICKS = 20 * 180;
     private static final int EXPEDITION_THREAT_RETREAT_TIMEOUT_TICKS = 20 * 120;
+    private static final int EXPEDITION_MOVE_STALL_TICKS = 20 * 45;
     private static final double EXPEDITION_HAZARD_ROUTE_AVOIDANCE_RADIUS = 6.0D;
+    private static final double EXPEDITION_RESOURCE_HIT_ROUTE_RADIUS = 24.0D;
+    private static final double EXPEDITION_RESOURCE_DIRECTION_SCORE_MARGIN = 4.0D;
     private static final int EXPEDITION_KNOWN_HAZARD_CACHE_SIZE = 24;
+    private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
+            Direction.NORTH,
+            Direction.EAST,
+            Direction.SOUTH,
+            Direction.WEST
+    };
     private static final Set<Block> EXPEDITION_RISKY_BLOCKS = Set.of(
             Blocks.POWDER_SNOW,
             Blocks.POINTED_DRIPSTONE,
@@ -156,6 +165,10 @@ public class LocalBehaviorController {
     private BlockPos expeditionLastTunnelStepPos;
     private BlockPos expeditionLastTorchPos;
     private int expeditionTunnelStepsSinceTorch;
+    private BlockPos expeditionMoveWatchTarget;
+    private BlockPos expeditionMoveWatchLastPos;
+    private String expeditionMoveWatchLabel = "none";
+    private int expeditionMoveWatchTicks;
     private BlockPos placeTarget;
     private BlockPos craftingStationTarget;
     private BlockPos furnaceStationTarget;
@@ -231,6 +244,7 @@ public class LocalBehaviorController {
         this.expeditionFoodRestockUnavailable = false;
         this.expeditionKnownHazards = new ArrayList<>();
         this.expeditionSupplyStatus = "idle";
+        this.resetExpeditionMoveWatch();
         this.resetBranchPattern();
         this.resetTorchPattern();
         this.placeTarget = null;
@@ -342,6 +356,7 @@ public class LocalBehaviorController {
         this.expeditionFoodRestockUnavailable = false;
         this.expeditionKnownHazards = new ArrayList<>();
         this.expeditionSupplyStatus = "idle";
+        this.resetExpeditionMoveWatch();
         this.resetBranchPattern();
         this.resetTorchPattern();
         this.placeTarget = null;
@@ -606,6 +621,10 @@ public class LocalBehaviorController {
                 + ", workflow=" + this.workflowSummary();
     }
 
+    public String getExpeditionStatus() {
+        return this.expeditionSummary() + ", workflow=" + this.workflowSummary();
+    }
+
     private void followPlayer(FriendTask task) {
         Optional<ServerPlayer> owner = this.findTaskPlayer(task);
         if (owner.isEmpty()) {
@@ -800,6 +819,13 @@ public class LocalBehaviorController {
         this.friend.setFriendState(FriendState.RETURNING);
         this.sayThrottled("Returning for safety/resupply: " + reason + ".");
         if (this.friend.blockPosition().distSqr(safeReturnTarget) > 9.0D) {
+            if (this.isExpeditionMoveStalled(safeReturnTarget, "returning")) {
+                this.body.stop();
+                this.rememberExpeditionInterrupted(task, "paused", "return path stalled while " + reason);
+                this.setExpeditionSupplyStatus("paused: return path stalled");
+                this.friend.getFriendBrain().failTask("I could not reach the expedition return point for " + reason + ".");
+                return true;
+            }
             if (inventoryResupply && task.type() == FriendTaskType.MINING_EXPEDITION) {
                 this.setExpeditionSupplyStatus("returning: " + reason);
             }
@@ -808,6 +834,7 @@ public class LocalBehaviorController {
         }
 
         this.body.stop();
+        this.resetExpeditionMoveWatch();
         if (healthRecovery && task.type() == FriendTaskType.MINING_EXPEDITION) {
             return this.handleExpeditionHealthRecovery(serverLevel, task);
         }
@@ -1357,6 +1384,9 @@ public class LocalBehaviorController {
             return;
         }
         if (this.workflowOutputSatisfied()) {
+            if (this.returnBeforeCompletingExpedition(serverLevel, task, "target satisfied")) {
+                return;
+            }
             this.rememberExpeditionCompleted(task, "target satisfied");
             this.friend.getFriendBrain().completeTask();
             return;
@@ -1365,6 +1395,9 @@ public class LocalBehaviorController {
         for (int guard = 0; guard < 4; guard++) {
             Optional<WorkStep> current = this.workflow.currentStep();
             if (current.isEmpty()) {
+                if (this.returnBeforeCompletingExpedition(serverLevel, task, "workflow complete")) {
+                    return;
+                }
                 this.rememberExpeditionCompleted(task, "workflow complete");
                 this.friend.getFriendBrain().completeTask();
                 return;
@@ -1383,6 +1416,129 @@ public class LocalBehaviorController {
                 return;
             }
         }
+    }
+
+    private boolean returnBeforeCompletingExpedition(ServerLevel level, FriendTask task, String reason) {
+        if (task == null || task.type() != FriendTaskType.MINING_EXPEDITION) {
+            return false;
+        }
+        Optional<BlockPos> returnTarget = this.expeditionCompletionReturnTarget(level, task);
+        if (returnTarget.isEmpty()) {
+            return false;
+        }
+        BlockPos target = returnTarget.get();
+        if (this.friend.blockPosition().distSqr(target) <= 9.0D) {
+            this.resetExpeditionMoveWatch();
+            if (this.cleanupExpeditionInventoryBeforeCompletion(level, task)) {
+                return true;
+            }
+            this.body.stop();
+            this.setExpeditionSupplyStatus("complete: returned");
+            return false;
+        }
+        this.friend.setFriendState(FriendState.RETURNING);
+        this.setExpeditionSupplyStatus("returning: " + reason);
+        this.sayThrottled("I found the target resource and am returning before I finish the expedition.");
+        if (this.isExpeditionMoveStalled(target, "completion return")) {
+            this.body.stop();
+            this.setExpeditionSupplyStatus("complete: return path stalled");
+            this.rememberExpeditionInterrupted(task, "return_stalled", "completion return path stalled");
+            this.sayThrottled("The return path stalled, so I am finishing the completed expedition here.");
+            return false;
+        }
+        this.body.moveTo(target, TASK_SPEED);
+        return true;
+    }
+
+    private Optional<BlockPos> expeditionCompletionReturnTarget(ServerLevel level, FriendTask task) {
+        if (this.expeditionSupplyPoint != null
+                && level.hasChunkAt(this.expeditionSupplyPoint)
+                && this.canStandAt(level, this.expeditionSupplyPoint)) {
+            return Optional.of(this.expeditionSupplyPoint);
+        }
+        return this.findTaskPlayer(task)
+                .filter(player -> player.level() == level)
+                .map(ServerPlayer::blockPosition);
+    }
+
+    private boolean cleanupExpeditionInventoryBeforeCompletion(ServerLevel level, FriendTask task) {
+        if (task == null || task.type() != FriendTaskType.MINING_EXPEDITION || !this.hasCompletionCleanupOverflow(task)) {
+            return false;
+        }
+        Optional<BlockPos> chestPos = this.findNearbySupplyChest(level, 8);
+        if (chestPos.isEmpty() || !(level.getBlockEntity(chestPos.get()) instanceof Container chest)) {
+            return false;
+        }
+        this.expeditionSupplyChest = chestPos.get();
+        if (!this.interaction.canReachBlock(this.expeditionSupplyChest)) {
+            this.setExpeditionSupplyStatus("moving to final unload");
+            this.body.moveTo(this.findStandPositionNearBlock(level, this.expeditionSupplyChest).orElse(this.expeditionSupplyChest), TASK_SPEED);
+            return true;
+        }
+
+        int moved = this.unloadMatchingInventoryItems(chest, stack -> !this.shouldKeepForExpedition(stack, task));
+        if (moved > 0) {
+            this.setExpeditionSupplyStatus("final inventory unloaded");
+            this.rememberPortableNote(task, "expedition final unload into supply chest at "
+                    + this.formatPos(this.expeditionSupplyChest)
+                    + " moved="
+                    + moved);
+            this.rememberExpeditionResupplied(task);
+        }
+        return false;
+    }
+
+    private boolean hasCompletionCleanupOverflow(FriendTask task) {
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (!stack.isEmpty() && !this.shouldKeepForExpedition(stack, task)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isExpeditionMoveStalled(BlockPos target, String label) {
+        if (target == null) {
+            this.resetExpeditionMoveWatch();
+            return false;
+        }
+        BlockPos current = this.friend.blockPosition().immutable();
+        if (this.expeditionMoveWatchTarget == null || !this.expeditionMoveWatchTarget.equals(target)) {
+            this.expeditionMoveWatchTarget = target.immutable();
+            this.expeditionMoveWatchLastPos = current;
+            this.expeditionMoveWatchLabel = label == null || label.isBlank() ? "moving" : label;
+            this.expeditionMoveWatchTicks = 0;
+            return false;
+        }
+
+        this.expeditionMoveWatchLabel = label == null || label.isBlank() ? this.expeditionMoveWatchLabel : label;
+        if (!current.equals(this.expeditionMoveWatchLastPos)) {
+            this.expeditionMoveWatchLastPos = current;
+            this.expeditionMoveWatchTicks = 0;
+            return false;
+        }
+
+        this.expeditionMoveWatchTicks++;
+        return this.expeditionMoveWatchTicks >= EXPEDITION_MOVE_STALL_TICKS;
+    }
+
+    private void resetExpeditionMoveWatch() {
+        this.expeditionMoveWatchTarget = null;
+        this.expeditionMoveWatchLastPos = null;
+        this.expeditionMoveWatchLabel = "none";
+        this.expeditionMoveWatchTicks = 0;
+    }
+
+    private void pauseCurrentExpedition(String status, String reason, String message) {
+        FriendTask task = this.friend.getCurrentTask();
+        if (task != null && task.type() == FriendTaskType.MINING_EXPEDITION) {
+            this.rememberExpeditionInterrupted(task, status == null || status.isBlank() ? "paused" : status, reason);
+            this.setExpeditionSupplyStatus("paused: " + reason);
+        }
+        this.body.stop();
+        this.say(message);
+        this.friend.getFriendBrain().completeTask();
     }
 
     private boolean executeAcquireItemStep(ServerLevel serverLevel, WorkStep step) {
@@ -1525,9 +1681,10 @@ public class LocalBehaviorController {
         }
 
         if (currentY < target.minY()) {
-            step.running("below target layer");
-            this.sayThrottled("I am below the requested mining layer and need a safe path upward; that executor is not ready yet.");
-            return false;
+            step.running("digging survival staircase up");
+            this.updateTunnelTorchProgress();
+            this.tryPlaceExpeditionTorch(serverLevel, step);
+            return this.digOneStairUp(serverLevel, step);
         }
 
         step.running("digging survival staircase");
@@ -1549,12 +1706,19 @@ public class LocalBehaviorController {
             return true;
         }
         if (!this.hasToolForAnySource(target.sourceBlocks())) {
+            if (this.expeditionToolRestockUnavailable) {
+                step.failed("missing tool and restock unavailable");
+                this.pauseCurrentExpedition(
+                        "paused",
+                        "tool restock unavailable",
+                        "I cannot continue branch mining because I do not have a usable "
+                                + target.requiredToolHint()
+                                + ", and the supply chest could not provide or craft one."
+                );
+                return false;
+            }
             step.running("missing tool for branch mining");
             this.sayThrottled("I still need " + target.requiredToolHint() + " before branch mining " + target.displayName() + ".");
-            return false;
-        }
-
-        if (this.moveToRememberedBranchRouteTarget(serverLevel, step)) {
             return false;
         }
 
@@ -1569,6 +1733,10 @@ public class LocalBehaviorController {
             );
         }
 
+        if (this.moveToRememberedBranchRouteTarget(serverLevel, step)) {
+            return false;
+        }
+
         MineActionAdapter.MineResult result = this.mineAdapter.mineAny(
                 serverLevel,
                 target.inventoryMatcher(),
@@ -1580,25 +1748,34 @@ public class LocalBehaviorController {
             this.sayThrottled("PlayerEngine is searching for " + target.displayName() + ".");
             return false;
         }
-        if (result == MineActionAdapter.MineResult.BROKEN && this.friend.countInventoryItems(target.inventoryMatcher()) >= step.amount()) {
+        if (result == MineActionAdapter.MineResult.BROKEN) {
+            int minedCount = this.friend.countInventoryItems(target.inventoryMatcher());
+            if (minedCount <= current) {
+                step.running("continuing branch mining");
+                return false;
+            }
             this.rememberResourceKnowledge(
                     step.target(),
-                    "Observed success: branch/expedition mining obtained " + target.displayName() + " at Y " + this.friend.blockPosition().getY() + ".",
+                    "Observed progress: branch/expedition mining obtained " + target.displayName() + " at Y " + this.friend.blockPosition().getY() + ".",
                     "observed_expedition_mining"
             );
             this.rememberPortableNote(this.friend.getCurrentTask(), "expedition mined "
                     + target.resourceId()
                     + " amount="
-                    + this.friend.countInventoryItems(target.inventoryMatcher())
+                    + minedCount
                     + " pos="
                     + this.formatPos(this.friend.blockPosition()));
             this.rememberExpeditionMiningSuccess(
                     this.friend.getCurrentTask(),
                     target.resourceId(),
-                    this.friend.countInventoryItems(target.inventoryMatcher())
+                    minedCount
             );
-            this.workflow.completeCurrent("mined " + target.displayName());
-            return true;
+            if (minedCount >= step.amount()) {
+                this.workflow.completeCurrent("mined " + target.displayName());
+                return true;
+            }
+            step.running("continuing branch mining for " + target.displayName());
+            return false;
         }
 
         step.running("digging branch tunnel");
@@ -2136,8 +2313,13 @@ public class LocalBehaviorController {
         );
         switch (result) {
             case BROKEN -> {
+                BlockPos minedTarget = this.resourceTarget;
                 this.resourceTarget = null;
-                if (this.friend.countInventoryItems(inventoryMatcher) >= step.amount()) {
+                int minedCount = this.friend.countInventoryItems(inventoryMatcher);
+                if (minedCount > current) {
+                    this.rememberVisibleExpeditionTargetMiningSuccess(step, minedCount, minedTarget);
+                }
+                if (minedCount >= step.amount()) {
                     this.rememberResourceKnowledge(
                             step.target(),
                             "Observed success: mined " + displayName + " in " + serverLevel.dimension().location() + " using survival-style block breaking or PlayerEngine/Baritone mining.",
@@ -2157,6 +2339,30 @@ public class LocalBehaviorController {
             }
         }
         return false;
+    }
+
+    private void rememberVisibleExpeditionTargetMiningSuccess(
+            WorkStep step,
+            int minedCount,
+            BlockPos minedTarget
+    ) {
+        FriendTask task = this.friend.getCurrentTask();
+        if (task == null
+                || task.type() != FriendTaskType.MINING_EXPEDITION
+                || step.type() != WorkStepType.BRANCH_MINE_RESOURCE) {
+            return;
+        }
+        if (minedCount <= 0) {
+            return;
+        }
+        BlockPos hitPos = minedTarget == null ? this.friend.blockPosition() : minedTarget;
+        this.rememberPortableNote(task, "expedition mined "
+                + step.target()
+                + " amount="
+                + minedCount
+                + " pos="
+                + this.formatPos(hitPos));
+        this.rememberExpeditionMiningSuccess(task, step.target(), minedCount, hitPos);
     }
 
     private boolean craftPlanksFromLog(ServerLevel level) {
@@ -2224,6 +2430,38 @@ public class LocalBehaviorController {
 
     private boolean hasBlastFurnace() {
         return this.friend.countInventoryItems(stack -> stack.is(Items.BLAST_FURNACE)) > 0;
+    }
+
+    private Block expeditionFloorRepairBlockToPlace(FriendTask task) {
+        if (this.canUseForFloorRepair(task, Items.COBBLESTONE)) {
+            return Blocks.COBBLESTONE;
+        }
+        if (this.canUseForFloorRepair(task, Items.COBBLED_DEEPSLATE)) {
+            return Blocks.COBBLED_DEEPSLATE;
+        }
+        if (this.canUseForFloorRepair(task, Items.DIRT)) {
+            return Blocks.DIRT;
+        }
+        if (this.canUseForFloorRepair(task, Items.NETHERRACK)) {
+            return Blocks.NETHERRACK;
+        }
+        return null;
+    }
+
+    private boolean canUseForFloorRepair(FriendTask task, net.minecraft.world.item.Item item) {
+        if (item == null || this.friend.countInventoryItems(stack -> stack.is(item)) <= 0) {
+            return false;
+        }
+        if (task == null || task.target() == null || task.target().isBlank()) {
+            return true;
+        }
+        return MiningTargetRegistry.find(task.target())
+                .map(target -> !target.inventoryMatcher().test(new ItemStack(item)))
+                .orElse(true);
+    }
+
+    private boolean isMatchingFloorRepairBlock(ItemStack stack, Block block) {
+        return !stack.isEmpty() && block != null && stack.is(block.asItem());
     }
 
     private Block supplyFurnaceBlockToPlace() {
@@ -2627,6 +2865,13 @@ public class LocalBehaviorController {
                     + this.emptyInventorySlots());
             this.rememberExpeditionResupplied(task);
         }
+        if (this.hasStorableExpeditionOverflow(task)
+                && !this.canContainerAcceptStorableExpeditionOverflow(chest, task)) {
+            ResupplyResult expansion = this.placeAdditionalSupplyChest(level, task, chest);
+            if (expansion == ResupplyResult.WORKING || expansion == ResupplyResult.COMPLETE) {
+                return ResupplyResult.WORKING;
+            }
+        }
         SupplyRestockResult restockResult = this.restockExpeditionSuppliesFromChest(level, task, chest);
         if (restockResult == SupplyRestockResult.WORKING) {
             return ResupplyResult.WORKING;
@@ -2644,6 +2889,46 @@ public class LocalBehaviorController {
                 && this.emptyInventorySlots() > 1
                 ? ResupplyResult.COMPLETE
                 : ResupplyResult.FAILED;
+    }
+
+    private ResupplyResult placeAdditionalSupplyChest(ServerLevel level, FriendTask task, Container chest) {
+        if (!this.hasChest()) {
+            SupplyCraftResult craftResult = this.craftSupplyChestFromChest(level, task, chest);
+            if (craftResult == SupplyCraftResult.WORKING) {
+                return ResupplyResult.WORKING;
+            }
+            if (!this.hasChest()) {
+                this.setExpeditionSupplyStatus("blocked: no extra supply chest");
+                return ResupplyResult.FAILED;
+            }
+        }
+        Optional<BlockPos> placement = this.findSupplyChestPlacement(level, task);
+        if (placement.isEmpty()) {
+            this.setExpeditionSupplyStatus("blocked: no room for extra supply chest");
+            return ResupplyResult.FAILED;
+        }
+        this.setExpeditionSupplyStatus("placing extra supply chest");
+        PlaceActionAdapter.PlaceResult placeResult = this.placeAdapter.placeBlock(
+                level,
+                placement.get(),
+                Blocks.CHEST,
+                stack -> stack.is(Items.CHEST),
+                () -> this.findStandPositionNearBlock(level, placement.get()),
+                TASK_SPEED
+        );
+        if (placeResult == PlaceActionAdapter.PlaceResult.WORKING) {
+            return ResupplyResult.WORKING;
+        }
+        if (placeResult == PlaceActionAdapter.PlaceResult.PLACED) {
+            this.expeditionSupplyChest = placement.get();
+            this.setExpeditionSupplyStatus("expanded supply storage");
+            this.rememberPortableNote(task, "expedition placed extra supply chest at "
+                    + this.formatPos(this.expeditionSupplyChest));
+            this.rememberExpeditionSupplyChest(task, this.expeditionSupplyChest, "placed extra supply chest");
+            return ResupplyResult.COMPLETE;
+        }
+        this.setExpeditionSupplyStatus("blocked: extra supply chest placement failed");
+        return ResupplyResult.FAILED;
     }
 
     private SupplyRestockResult restockExpeditionSuppliesFromChest(ServerLevel level, FriendTask task, Container chest) {
@@ -2743,7 +3028,7 @@ public class LocalBehaviorController {
     private boolean canCraftExpeditionTorchesFromSupplyChest(Container chest) {
         return this.countContainerItems(chest, this::isTorchCraftingFuel) > 0
                 && (this.countContainerItems(chest, stack -> stack.is(Items.STICK)) > 0
-                || this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= 2);
+                || this.potentialSupplyChestPlanks(chest) >= 2);
     }
 
     private boolean ensureSupplyChestSticks(ServerLevel level, Container chest, int amount) {
@@ -2751,8 +3036,10 @@ public class LocalBehaviorController {
         if (this.countContainerItems(chest, stack -> stack.is(Items.STICK)) >= required) {
             return true;
         }
-        while (this.countContainerItems(chest, stack -> stack.is(Items.STICK)) < required
-                && this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= 2) {
+        while (this.countContainerItems(chest, stack -> stack.is(Items.STICK)) < required) {
+            if (!this.ensureSupplyChestPlanks(level, chest, 2)) {
+                return false;
+            }
             int movedPlanks = 0;
             while (movedPlanks < 2 && this.moveOneMatchingFromContainer(chest, stack -> stack.is(ItemTags.PLANKS))) {
                 movedPlanks++;
@@ -2766,11 +3053,44 @@ public class LocalBehaviorController {
                     2
             );
             if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
+                this.unloadSupplyCraftingRemainders(chest);
                 return false;
             }
             this.unloadMatchingInventoryItems(chest, stack -> stack.is(Items.STICK));
         }
         return this.countContainerItems(chest, stack -> stack.is(Items.STICK)) >= required;
+    }
+
+    private boolean ensureSupplyChestPlanks(ServerLevel level, Container chest, int amount) {
+        int required = Math.max(1, amount);
+        if (this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= required) {
+            return true;
+        }
+        while (this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) < required
+                && this.countContainerItems(chest, stack -> stack.is(ItemTags.LOGS)) > 0) {
+            if (!this.moveOneMatchingFromContainer(chest, stack -> stack.is(ItemTags.LOGS))) {
+                return false;
+            }
+            CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOne(
+                    level,
+                    stack -> stack.is(ItemTags.PLANKS),
+                    2
+            );
+            if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
+                this.unloadSupplyCraftingRemainders(chest);
+                return false;
+            }
+            this.unloadMatchingInventoryItems(chest, stack -> stack.is(ItemTags.PLANKS));
+        }
+        return this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= required;
+    }
+
+    private int potentialSupplyChestPlanks(Container chest) {
+        if (chest == null) {
+            return 0;
+        }
+        return this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS))
+                + this.countContainerItems(chest, stack -> stack.is(ItemTags.LOGS)) * 4;
     }
 
     private SupplyCraftResult craftExpeditionPickaxeFromSupplyChest(ServerLevel level, FriendTask task, Container chest) {
@@ -2852,7 +3172,7 @@ public class LocalBehaviorController {
     private boolean canCraftSupplyPickaxe(Container chest, Predicate<ItemStack> headMaterialMatcher) {
         return this.countContainerItems(chest, headMaterialMatcher) >= 3
                 && (this.countContainerItems(chest, stack -> stack.is(Items.STICK)) >= 2
-                || this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= 2);
+                || this.potentialSupplyChestPlanks(chest) >= 2);
     }
 
     private SupplyCraftResult craftSupplyFurnaceFromChest(ServerLevel level, FriendTask task, Container chest) {
@@ -2898,14 +3218,61 @@ public class LocalBehaviorController {
         return this.hasSupplyCraftingTable(level)
                 || this.hasCraftingTable()
                 || this.countContainerItems(chest, stack -> stack.is(Items.CRAFTING_TABLE)) > 0
-                || this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= 4;
+                || this.potentialSupplyChestPlanks(chest) >= 4;
+    }
+
+    private SupplyCraftResult craftSupplyChestFromChest(ServerLevel level, FriendTask task, Container chest) {
+        if (!this.canCraftSupplyChestFromChest(level, chest)) {
+            return SupplyCraftResult.NONE;
+        }
+        SupplyStationResult stationResult = this.ensureSupplyCraftingTable(level, task, chest);
+        if (stationResult == SupplyStationResult.WORKING) {
+            return SupplyCraftResult.WORKING;
+        }
+        if (stationResult != SupplyStationResult.READY) {
+            return SupplyCraftResult.NONE;
+        }
+
+        if (!this.ensureSupplyChestPlanks(level, chest, 8)
+                || !this.moveMatchingItemsFromContainer(chest, stack -> stack.is(ItemTags.PLANKS), 8)) {
+            this.unloadSupplyCraftingRemainders(chest);
+            return SupplyCraftResult.NONE;
+        }
+        CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOneWithBestContext(
+                level,
+                this.recipeMatcherFor(WorkflowFactory.CHEST),
+                this.craftingStationTarget
+        );
+        if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
+            this.unloadSupplyCraftingRemainders(chest);
+            return SupplyCraftResult.NONE;
+        }
+        if (!this.hasChest()) {
+            return SupplyCraftResult.NONE;
+        }
+
+        this.setExpeditionSupplyStatus("crafted extra supply chest");
+        this.rememberPortableNote(task, "crafted extra supply chest from chest planks at "
+                + this.formatPos(this.craftingStationTarget));
+        return SupplyCraftResult.CRAFTED;
+    }
+
+    private boolean canCraftSupplyChestFromChest(ServerLevel level, Container chest) {
+        if (chest == null) {
+            return false;
+        }
+        int planks = this.potentialSupplyChestPlanks(chest);
+        boolean hasStationPath = this.hasSupplyCraftingTable(level)
+                || this.hasCraftingTable()
+                || this.countContainerItems(chest, stack -> stack.is(Items.CRAFTING_TABLE)) > 0;
+        return hasStationPath ? planks >= 8 : planks >= 12;
     }
 
     private boolean canCraftExpeditionPickaxeFromSupplyChest(ServerLevel level, FriendTask task, Container chest) {
         MiningTargetRegistry.ToolRequirement requirement = MiningTargetRegistry.find(task.target())
                 .map(MiningTargetRegistry.MiningTarget::toolRequirement)
                 .orElse(MiningTargetRegistry.ToolRequirement.STONE_PICKAXE);
-        int planks = this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS));
+        int planks = this.potentialSupplyChestPlanks(chest);
         boolean hasStationPath = this.hasSupplyCraftingTable(level)
                 || this.hasCraftingTable()
                 || this.countContainerItems(chest, stack -> stack.is(Items.CRAFTING_TABLE)) > 0
@@ -2942,8 +3309,9 @@ public class LocalBehaviorController {
         if (!this.hasCraftingTable() && this.moveOneMatchingFromContainer(chest, stack -> stack.is(Items.CRAFTING_TABLE))) {
             this.setExpeditionSupplyStatus("pulled supply crafting table");
         }
-        if (!this.hasCraftingTable() && this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS)) >= 4) {
-            if (!this.moveMatchingItemsFromContainer(chest, stack -> stack.is(ItemTags.PLANKS), 4)) {
+        if (!this.hasCraftingTable() && this.potentialSupplyChestPlanks(chest) >= 4) {
+            if (!this.ensureSupplyChestPlanks(level, chest, 4)
+                    || !this.moveMatchingItemsFromContainer(chest, stack -> stack.is(ItemTags.PLANKS), 4)) {
                 return SupplyStationResult.UNAVAILABLE;
             }
             CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOne(
@@ -3008,6 +3376,7 @@ public class LocalBehaviorController {
                 || stack.is(Items.COBBLESTONE)
                 || stack.is(Items.IRON_INGOT)
                 || stack.is(ItemTags.PLANKS)
+                || stack.is(ItemTags.LOGS)
                 || stack.is(Items.CRAFTING_TABLE));
     }
 
@@ -3590,6 +3959,55 @@ public class LocalBehaviorController {
         return false;
     }
 
+    private boolean hasStorableExpeditionOverflow(FriendTask task) {
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (this.isStorableExpeditionOverflow(stack, task)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean canContainerAcceptStorableExpeditionOverflow(Container container, FriendTask task) {
+        if (container == null) {
+            return false;
+        }
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (this.isStorableExpeditionOverflow(stack, task) && this.canContainerAccept(container, stack)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isStorableExpeditionOverflow(ItemStack stack, FriendTask task) {
+        return !stack.isEmpty()
+                && !stack.is(Items.CHEST)
+                && !this.shouldKeepForExpedition(stack, task);
+    }
+
+    private boolean canContainerAccept(Container container, ItemStack stack) {
+        if (container == null || stack.isEmpty()) {
+            return false;
+        }
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack existing = container.getItem(slot);
+            if (existing.isEmpty()) {
+                return true;
+            }
+            if (!ItemStack.isSameItemSameTags(existing, stack)) {
+                continue;
+            }
+            int max = Math.min(existing.getMaxStackSize(), container.getMaxStackSize());
+            if (existing.getCount() < max) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private ItemStack insertIntoContainer(Container container, ItemStack stack) {
         ItemStack remainder = stack.copy();
         for (int slot = 0; slot < container.getContainerSize(); slot++) {
@@ -3647,6 +4065,10 @@ public class LocalBehaviorController {
 
         BlockPos torchPos = this.friend.blockPosition();
         boolean intervalDue = this.expeditionTunnelStepsSinceTorch >= TORCH_INTERVAL_STEPS;
+        if (intervalDue && this.hasNearbyTorch(level, torchPos, 5)) {
+            this.expeditionTunnelStepsSinceTorch = 0;
+            return false;
+        }
         if (!this.shouldPlaceTorch(level, torchPos, intervalDue) || !this.interaction.canPlaceBlockAt(level, torchPos)) {
             return false;
         }
@@ -3682,7 +4104,11 @@ public class LocalBehaviorController {
             return false;
         }
         int radius = intervalDue ? 5 : 7;
-        return this.findNearestBlock(level, radius, candidate -> this.isTorchAt(level, candidate)).isEmpty();
+        return !this.hasNearbyTorch(level, pos, radius);
+    }
+
+    private boolean hasNearbyTorch(ServerLevel level, BlockPos pos, int radius) {
+        return this.findNearestBlock(level, radius, candidate -> this.isTorchAt(level, candidate)).isPresent();
     }
 
     private boolean isTorchAt(ServerLevel level, BlockPos pos) {
@@ -3776,6 +4202,9 @@ public class LocalBehaviorController {
         Direction direction = this.expeditionDirection();
         BlockPos nextFeet = this.friend.blockPosition().relative(direction).below();
         if (!this.canUsePassageFoot(level, nextFeet)) {
+            if (this.tryRepairPassageFloor(level, step, nextFeet, "staircase down")) {
+                return false;
+            }
             this.rotateExpeditionDirection();
             step.running("finding safe staircase direction");
             this.sayThrottled("Looking for a safer staircase direction.");
@@ -3790,6 +4219,27 @@ public class LocalBehaviorController {
         return this.moveOrDigPassage(level, step, nextFeet, "staircase down");
     }
 
+    private boolean digOneStairUp(ServerLevel level, WorkStep step) {
+        Direction direction = this.expeditionDirection();
+        BlockPos nextFeet = this.friend.blockPosition().relative(direction).above();
+        if (!this.canUsePassageFoot(level, nextFeet)) {
+            if (this.tryRepairPassageFloor(level, step, nextFeet, "staircase up")) {
+                return false;
+            }
+            this.rotateExpeditionDirection();
+            step.running("finding safe upward staircase direction");
+            this.sayThrottled("Looking for a safer upward staircase direction.");
+            return false;
+        }
+        if (this.isNearCurrentExpeditionHazard(level, nextFeet)) {
+            this.rotateExpeditionDirection();
+            step.running("avoiding remembered upward staircase hazard");
+            this.sayThrottled("Avoiding a remembered hazard near the upward staircase route.");
+            return false;
+        }
+        return this.moveOrDigPassage(level, step, nextFeet, "staircase up");
+    }
+
     private boolean digOneBranchTunnelStep(ServerLevel level, WorkStep step) {
         this.updateBranchPatternProgress();
         if (this.moveBackFromSideBranch(step)) {
@@ -3801,6 +4251,9 @@ public class LocalBehaviorController {
         Direction direction = this.currentBranchDirection();
         BlockPos nextFeet = this.friend.blockPosition().relative(direction);
         if (!this.canUsePassageFoot(level, nextFeet)) {
+            if (this.tryRepairPassageFloor(level, step, nextFeet, "branch tunnel")) {
+                return false;
+            }
             this.rotateBranchDirection();
             step.running("finding safe branch direction");
             this.sayThrottled("Rotating the branch tunnel because the next space is unsafe.");
@@ -3874,7 +4327,19 @@ public class LocalBehaviorController {
 
     private void ensureBranchPatternDirection() {
         if (this.expeditionMainDirection == null || this.expeditionMainDirection.getAxis().isVertical()) {
-            this.expeditionMainDirection = this.expeditionDirection();
+            Direction fallback = this.expeditionDirection();
+            Optional<Direction> preferred = this.preferredInitialBranchDirectionFromResourceHits(
+                    this.friend.blockPosition(),
+                    fallback
+            );
+            this.expeditionMainDirection = preferred.orElse(fallback);
+            this.expeditionDirection = this.expeditionMainDirection;
+            if (preferred.isPresent()) {
+                this.rememberExpeditionBranchNote("selected main branch dir="
+                        + this.expeditionMainDirection.getName()
+                        + " using resource-hit memory at "
+                        + this.formatPos(this.friend.blockPosition()));
+            }
         }
         if (this.expeditionDirection == null || this.expeditionDirection.getAxis().isVertical()) {
             this.expeditionDirection = this.expeditionMainDirection;
@@ -3901,17 +4366,138 @@ public class LocalBehaviorController {
         );
         this.expeditionSideBranchAnchor = this.friend.blockPosition().immutable();
         this.expeditionSideBranchCount++;
-        this.expeditionSideDirection = this.expeditionSideBranchCount % 2 == 0
-                ? this.expeditionMainDirection.getCounterClockWise()
-                : this.expeditionMainDirection.getClockWise();
+        Optional<Direction> preferredSide = this.preferredSideBranchDirection(this.expeditionSideBranchAnchor);
+        this.expeditionSideDirection = preferredSide.orElseGet(() -> this.expeditionSideBranchCount % 2 == 0
+                        ? this.expeditionMainDirection.getCounterClockWise()
+                        : this.expeditionMainDirection.getClockWise());
         this.expeditionDirection = this.expeditionSideDirection;
         this.expeditionSideStepsRemaining = BRANCH_SIDE_LENGTH;
+        this.markTorchDueAtBranchAnchor();
         this.rememberExpeditionBranchNote("started side branch "
                 + this.expeditionSideBranchCount
                 + " dir="
                 + this.expeditionSideDirection.getName()
                 + " anchor="
-                + this.formatPos(this.expeditionSideBranchAnchor));
+                + this.formatPos(this.expeditionSideBranchAnchor)
+                + (preferredSide.isPresent() ? " using resource-hit memory" : ""));
+    }
+
+    private void markTorchDueAtBranchAnchor() {
+        if (this.countTorches() > 0) {
+            this.expeditionTunnelStepsSinceTorch = Math.max(this.expeditionTunnelStepsSinceTorch, TORCH_INTERVAL_STEPS);
+        }
+    }
+
+    private Optional<Direction> preferredSideBranchDirection(BlockPos anchor) {
+        if (anchor == null || this.expeditionMainDirection == null || this.expeditionMainDirection.getAxis().isVertical()) {
+            return Optional.empty();
+        }
+        FriendTask task = this.friend.getCurrentTask();
+        Optional<ExpeditionMemory> memory = this.findRememberedExpedition(task, this.currentDimension());
+        if (memory.isEmpty() || memory.get().resourceHits == null || memory.get().resourceHits.isEmpty()) {
+            return Optional.empty();
+        }
+        Direction clockwise = this.expeditionMainDirection.getClockWise();
+        Direction counterClockwise = this.expeditionMainDirection.getCounterClockWise();
+        double clockwiseScore = this.scoreResourceHitDirection(memory.get(), anchor, clockwise);
+        double counterClockwiseScore = this.scoreResourceHitDirection(memory.get(), anchor, counterClockwise);
+        if (Math.max(clockwiseScore, counterClockwiseScore) <= 0.0D
+                || Math.abs(clockwiseScore - counterClockwiseScore) < EXPEDITION_RESOURCE_DIRECTION_SCORE_MARGIN) {
+            return Optional.empty();
+        }
+        return Optional.of(clockwiseScore > counterClockwiseScore ? clockwise : counterClockwise);
+    }
+
+    private Optional<Direction> preferredInitialBranchDirectionFromResourceHits(BlockPos anchor, Direction fallback) {
+        if (anchor == null || fallback == null || fallback.getAxis().isVertical()) {
+            return Optional.empty();
+        }
+        FriendTask task = this.friend.getCurrentTask();
+        Optional<ExpeditionMemory> memory = this.findRememberedExpedition(task, this.currentDimension());
+        if (memory.isEmpty() || memory.get().resourceHits == null || memory.get().resourceHits.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Direction best = fallback;
+        double fallbackScore = this.scoreResourceHitDirection(memory.get(), anchor, fallback);
+        double bestScore = fallbackScore;
+        for (Direction direction : HORIZONTAL_EXPEDITION_DIRECTIONS) {
+            double score = this.scoreResourceHitDirection(memory.get(), anchor, direction);
+            if (score > bestScore) {
+                best = direction;
+                bestScore = score;
+            }
+        }
+        if (best == fallback
+                || bestScore <= 0.0D
+                || bestScore < fallbackScore + EXPEDITION_RESOURCE_DIRECTION_SCORE_MARGIN) {
+            return Optional.empty();
+        }
+        return Optional.of(best);
+    }
+
+    private Optional<Direction> preferredRotationDirectionFromResourceHits(BlockPos anchor, Direction base) {
+        if (anchor == null || base == null || base.getAxis().isVertical()) {
+            return Optional.empty();
+        }
+        FriendTask task = this.friend.getCurrentTask();
+        Optional<ExpeditionMemory> memory = this.findRememberedExpedition(task, this.currentDimension());
+        if (memory.isEmpty() || memory.get().resourceHits == null || memory.get().resourceHits.isEmpty()) {
+            return Optional.empty();
+        }
+        Direction clockwise = base.getClockWise();
+        Direction counterClockwise = base.getCounterClockWise();
+        double clockwiseScore = this.scoreResourceHitDirection(memory.get(), anchor, clockwise);
+        double counterClockwiseScore = this.scoreResourceHitDirection(memory.get(), anchor, counterClockwise);
+        if (counterClockwiseScore <= 0.0D
+                || counterClockwiseScore < clockwiseScore + EXPEDITION_RESOURCE_DIRECTION_SCORE_MARGIN) {
+            return Optional.empty();
+        }
+        return Optional.of(counterClockwise);
+    }
+
+    private double scoreResourceHitDirection(ExpeditionMemory memory, BlockPos anchor, Direction direction) {
+        if (memory == null || memory.resourceHits == null || anchor == null || direction == null || direction.getAxis().isVertical()) {
+            return 0.0D;
+        }
+        String dimension = this.currentDimension();
+        double score = 0.0D;
+        for (ExpeditionMemory.ResourceHit hit : memory.resourceHits) {
+            if (hit == null || hit.position == null || !hit.position.isInDimension(dimension)) {
+                continue;
+            }
+            BlockPos pos = hit.position.asBlockPos();
+            double dx = pos.getX() - anchor.getX();
+            double dz = pos.getZ() - anchor.getZ();
+            double forward = dx * direction.getStepX() + dz * direction.getStepZ();
+            if (forward <= 0.0D) {
+                continue;
+            }
+            double distanceSqr = Math.max(1.0D, anchor.distSqr(pos));
+            double amountBonus = Math.max(1, hit.amount) * 3.0D;
+            double directionBonus = direction.getName().equalsIgnoreCase(hit.direction) ? 12.0D : 0.0D;
+            score += (forward * forward * 24.0D / distanceSqr) + amountBonus + directionBonus;
+        }
+        return score;
+    }
+
+    private String currentExpeditionRouteType() {
+        if (this.expeditionSideStepsRemaining > 0
+                || this.expeditionReturningFromSideBranch
+                || this.expeditionSideBranchAnchor != null) {
+            return "side";
+        }
+        if (this.expeditionMainBranchStart != null || this.expeditionMainDirection != null) {
+            return "main";
+        }
+        return "unknown";
+    }
+
+    private String currentExpeditionRouteDirectionName() {
+        Direction direction = this.expeditionSideStepsRemaining > 0 && this.expeditionSideDirection != null
+                ? this.expeditionSideDirection
+                : (this.expeditionMainDirection == null ? this.expeditionDirection : this.expeditionMainDirection);
+        return direction == null ? "unknown" : direction.getName();
     }
 
     private Direction currentBranchDirection() {
@@ -3955,7 +4541,8 @@ public class LocalBehaviorController {
         Direction base = this.expeditionMainDirection == null || this.expeditionMainDirection.getAxis().isVertical()
                 ? this.expeditionDirection()
                 : this.expeditionMainDirection;
-        this.expeditionDirection = base.getClockWise();
+        Optional<Direction> preferredDirection = this.preferredRotationDirectionFromResourceHits(routeEnd, base);
+        this.expeditionDirection = preferredDirection.orElseGet(base::getClockWise);
         this.expeditionMainDirection = this.expeditionDirection;
         this.expeditionSideDirection = null;
         this.expeditionSideStepsRemaining = 0;
@@ -3970,6 +4557,7 @@ public class LocalBehaviorController {
                 + this.expeditionDirection.getName()
                 + " for "
                 + (reason == null || reason.isBlank() ? "safety" : reason)
+                + (preferredDirection.isPresent() ? " using resource-hit memory" : "")
                 + " near "
                 + this.formatPos(routeEnd));
     }
@@ -4018,6 +4606,12 @@ public class LocalBehaviorController {
             this.rememberExpeditionHazardAvoided("lava", target, "lava near " + label);
             return false;
         }
+        if (this.hasNearbyFluidLeak(level, target)) {
+            this.rotatePassageDirection(label);
+            step.running("avoiding fluid leak near " + label);
+            this.rememberExpeditionHazardAvoided("fluid", target, "fluid leak near " + label);
+            return false;
+        }
         if (this.isRiskyExpeditionPassageBlock(state)) {
             this.rotatePassageDirection(label);
             step.running("avoiding risky block in " + label);
@@ -4055,6 +4649,57 @@ public class LocalBehaviorController {
             }
         }
         return false;
+    }
+
+    private boolean tryRepairPassageFloor(ServerLevel level, WorkStep step, BlockPos nextFeet, String label) {
+        BlockPos floorPos = nextFeet == null ? null : nextFeet.below();
+        if (!this.canRepairPassageFloorAt(level, floorPos, nextFeet)) {
+            return false;
+        }
+        Block block = this.expeditionFloorRepairBlockToPlace(this.friend.getCurrentTask());
+        if (block == null) {
+            return false;
+        }
+        this.setExpeditionSupplyStatus("repairing floor gap");
+        PlaceActionAdapter.PlaceResult result = this.placeAdapter.placeBlock(
+                level,
+                floorPos,
+                block,
+                stack -> this.isMatchingFloorRepairBlock(stack, block),
+                () -> this.findStandPositionNearBlock(level, floorPos),
+                TASK_SPEED
+        );
+        if (result == PlaceActionAdapter.PlaceResult.WORKING) {
+            step.running("moving to repair floor for " + label);
+            return true;
+        }
+        if (result == PlaceActionAdapter.PlaceResult.PLACED) {
+            step.running("repaired floor for " + label);
+            this.rememberExpeditionRouteNote("route_repaired", "repaired floor gap for "
+                    + label
+                    + " at "
+                    + this.formatPos(floorPos));
+            return true;
+        }
+        return false;
+    }
+
+    private boolean canRepairPassageFloorAt(ServerLevel level, BlockPos floorPos, BlockPos feetPos) {
+        if (floorPos == null || feetPos == null || !level.hasChunkAt(floorPos)) {
+            return false;
+        }
+        BlockState floor = level.getBlockState(floorPos);
+        BlockState support = level.getBlockState(floorPos.below());
+        return floor.canBeReplaced()
+                && floor.getFluidState().isEmpty()
+                && support.getFluidState().isEmpty()
+                && !support.isAir()
+                && !this.isRiskyExpeditionFloorBlock(support)
+                && support.isFaceSturdy(level, floorPos.below(), Direction.UP)
+                && level.getFluidState(feetPos).isEmpty()
+                && level.getFluidState(feetPos.above()).isEmpty()
+                && !this.hasNearbyFluidHazard(level, floorPos)
+                && !this.hasNearbyFluidHazard(level, feetPos);
     }
 
     private void rotatePassageDirection(String label) {
@@ -4129,6 +4774,21 @@ public class LocalBehaviorController {
         return level.getFluidState(center).is(FluidTags.LAVA);
     }
 
+    private boolean hasNearbyFluidLeak(ServerLevel level, BlockPos center) {
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (Direction direction : Direction.values()) {
+            cursor.setWithOffset(center, direction);
+            if (this.isNonLavaFluid(level, cursor)) {
+                return true;
+            }
+        }
+        return this.isNonLavaFluid(level, center);
+    }
+
+    private boolean isNonLavaFluid(ServerLevel level, BlockPos pos) {
+        return !level.getFluidState(pos).isEmpty() && !level.getFluidState(pos).is(FluidTags.LAVA);
+    }
+
     private Direction expeditionDirection() {
         if (this.expeditionDirection == null || this.expeditionDirection.getAxis().isVertical()) {
             Direction facing = this.friend.getDirection();
@@ -4138,7 +4798,9 @@ public class LocalBehaviorController {
     }
 
     private void rotateExpeditionDirection() {
-        this.expeditionDirection = this.expeditionDirection().getClockWise();
+        Direction base = this.expeditionDirection();
+        this.expeditionDirection = this.preferredRotationDirectionFromResourceHits(this.friend.blockPosition(), base)
+                .orElseGet(base::getClockWise);
         this.expeditionDigTarget = null;
         this.interaction.cancelBreakBlock();
     }
@@ -4300,6 +4962,7 @@ public class LocalBehaviorController {
         String mainDirection = this.expeditionMainDirection == null ? "none" : this.expeditionMainDirection.getName();
         String sideDirection = this.expeditionSideDirection == null ? "none" : this.expeditionSideDirection.getName();
         int pickaxeDurability = this.bestExpeditionPickaxeDurability();
+        int resourceHits = this.rememberedResourceHitCount();
         String pickaxeDurabilitySummary = pickaxeDurability < 0
                 ? "none"
                 : pickaxeDurability == Integer.MAX_VALUE ? "unlimited" : String.valueOf(pickaxeDurability);
@@ -4345,8 +5008,16 @@ public class LocalBehaviorController {
                 + (this.expeditionLavaRerouteOrigin == null ? "none" : this.formatPos(this.expeditionLavaRerouteOrigin))
                 + ",knownHazards="
                 + (this.expeditionKnownHazards == null ? 0 : this.expeditionKnownHazards.size())
+                + ",resourceHits="
+                + resourceHits
                 + ",supplyStatus="
                 + this.expeditionSupplyStatus
+                + ",moveWatch="
+                + this.expeditionMoveWatchLabel
+                + ":"
+                + this.expeditionMoveWatchTicks
+                + "/"
+                + EXPEDITION_MOVE_STALL_TICKS
                 + ",torches="
                 + this.countTorches()
                 + ",foodItems="
@@ -4359,6 +5030,9 @@ public class LocalBehaviorController {
                 + this.expeditionToolRestockUnavailable
                 + ",food="
                 + this.expeditionFoodRestockUnavailable
+                + "}"
+                + ",supplyStock={"
+                + this.expeditionSupplyStockSummary()
                 + "}"
                 + ",branch={main="
                 + mainDirection
@@ -4375,6 +5049,56 @@ public class LocalBehaviorController {
                 + ",lastTorch="
                 + (this.expeditionLastTorchPos == null ? "none" : this.formatPos(this.expeditionLastTorchPos))
                 + "}";
+    }
+
+    private int rememberedResourceHitCount() {
+        FriendTask task = this.friend.getCurrentTask();
+        if (task == null || task.type() != FriendTaskType.MINING_EXPEDITION) {
+            return 0;
+        }
+        return this.findRememberedExpedition(task, this.expeditionMemoryDimension(task))
+                .map(memory -> memory.resourceHits == null ? 0 : memory.resourceHits.size())
+                .orElse(0);
+    }
+
+    private String expeditionSupplyStockSummary() {
+        if (this.expeditionSupplyChest == null || !(this.friend.level() instanceof ServerLevel level)) {
+            return "none";
+        }
+        if (!this.isLoaded(level, this.expeditionSupplyChest)
+                || !(level.getBlockEntity(this.expeditionSupplyChest) instanceof Container chest)) {
+            return "unavailable";
+        }
+        int torches = this.countContainerItems(chest, stack -> stack.is(Items.TORCH));
+        int food = this.countContainerItems(chest, this::isExpeditionFood);
+        int cookableFood = this.countContainerItems(chest, this::isCookableExpeditionFood);
+        int fuel = this.countContainerItems(chest, this::isSupplyFurnaceFuel);
+        int sticks = this.countContainerItems(chest, stack -> stack.is(Items.STICK));
+        int planks = this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS));
+        int logs = this.countContainerItems(chest, stack -> stack.is(ItemTags.LOGS));
+        int pickaxes = this.countContainerItems(chest, stack -> stack.is(ItemTags.PICKAXES));
+        int craftingTables = this.countContainerItems(chest, stack -> stack.is(Items.CRAFTING_TABLE));
+        int furnaces = this.countContainerItems(chest, stack -> stack.is(Items.FURNACE) || stack.is(Items.BLAST_FURNACE));
+        return "torches="
+                + torches
+                + ",food="
+                + food
+                + ",cookableFood="
+                + cookableFood
+                + ",fuel="
+                + fuel
+                + ",sticks="
+                + sticks
+                + ",planks="
+                + planks
+                + ",logs="
+                + logs
+                + ",pickaxes="
+                + pickaxes
+                + ",tables="
+                + craftingTables
+                + ",furnaces="
+                + furnaces;
     }
 
     private Optional<BlockPos> findCraftingTablePlacement(ServerLevel level, FriendTask task) {
@@ -4720,10 +5444,19 @@ public class LocalBehaviorController {
         if (this.friend.blockPosition().distSqr(this.expeditionMineEntrance) > 9.0D) {
             step.running("moving to remembered mine entrance");
             this.sayThrottled("Returning to remembered mine entrance at " + this.formatPos(this.expeditionMineEntrance) + ".");
+            if (this.isExpeditionMoveStalled(this.expeditionMineEntrance, "remembered entrance")) {
+                this.body.stop();
+                this.expeditionMineEntranceFromMemory = false;
+                this.expeditionReachedRememberedMineEntrance = true;
+                this.setExpeditionSupplyStatus("route reuse skipped: entrance stalled");
+                this.rememberExpeditionInterrupted(this.friend.getCurrentTask(), "route_invalid", "remembered mine entrance movement stalled");
+                return false;
+            }
             this.body.moveTo(this.expeditionMineEntrance, TASK_SPEED);
             return true;
         }
 
+        this.resetExpeditionMoveWatch();
         this.expeditionReachedRememberedMineEntrance = true;
         this.updateExpeditionMemory(this.friend.getCurrentTask(), expedition -> {
             expedition.status = "entrance_reached";
@@ -4764,10 +5497,20 @@ public class LocalBehaviorController {
         if (this.friend.blockPosition().distSqr(this.expeditionRouteResumeTarget) > 9.0D) {
             step.running("moving to remembered branch route");
             this.sayThrottled("Returning to remembered branch route at " + this.formatPos(this.expeditionRouteResumeTarget) + ".");
+            if (this.isExpeditionMoveStalled(this.expeditionRouteResumeTarget, "remembered route")) {
+                FriendTask task = this.friend.getCurrentTask();
+                this.invalidateRememberedBranchRoutesEndingAt(task, this.expeditionRouteResumeTarget, "remembered route movement stalled");
+                this.clearRememberedBranchRouteResume();
+                this.reselectRememberedBranchRoute(level, task);
+                this.setExpeditionSupplyStatus("route reuse skipped: route stalled");
+                step.running("remembered route stalled");
+                return false;
+            }
             this.body.moveTo(this.expeditionRouteResumeTarget, TASK_SPEED);
             return true;
         }
 
+        this.resetExpeditionMoveWatch();
         this.expeditionReachedRememberedRouteTarget = true;
         this.expeditionLastBranchStepPos = this.friend.blockPosition().immutable();
         if ("side".equals(this.expeditionRouteResumeType) && this.expeditionRouteResumeAnchor != null) {
@@ -4803,6 +5546,7 @@ public class LocalBehaviorController {
         this.expeditionRouteResumeWaypointIndex = 0;
         this.expeditionRouteResumeFromMemory = false;
         this.expeditionReachedRememberedRouteTarget = true;
+        this.resetExpeditionMoveWatch();
     }
 
     private boolean reselectRememberedBranchRoute(ServerLevel level, FriendTask task) {
@@ -4852,10 +5596,20 @@ public class LocalBehaviorController {
                         + " at "
                         + this.formatPos(waypoint)
                         + ".");
+                if (this.isExpeditionMoveStalled(waypoint, "remembered waypoint")) {
+                    FriendTask task = this.friend.getCurrentTask();
+                    this.invalidateRememberedBranchRoutesEndingAt(task, waypoint, "remembered route waypoint movement stalled");
+                    this.clearRememberedBranchRouteResume();
+                    this.reselectRememberedBranchRoute(level, task);
+                    this.setExpeditionSupplyStatus("route reuse skipped: waypoint stalled");
+                    step.running("remembered waypoint stalled");
+                    return true;
+                }
                 this.body.moveTo(waypoint, TASK_SPEED);
                 return true;
             }
             if (this.friend.blockPosition().distSqr(waypoint) <= 9.0D) {
+                this.resetExpeditionMoveWatch();
                 this.expeditionRouteResumeWaypointIndex++;
                 continue;
             }
@@ -4867,6 +5621,15 @@ public class LocalBehaviorController {
                     + " at "
                     + this.formatPos(waypoint)
                     + ".");
+            if (this.isExpeditionMoveStalled(waypoint, "remembered waypoint")) {
+                FriendTask task = this.friend.getCurrentTask();
+                this.invalidateRememberedBranchRoutesEndingAt(task, waypoint, "remembered route waypoint movement stalled");
+                this.clearRememberedBranchRouteResume();
+                this.reselectRememberedBranchRoute(level, task);
+                this.setExpeditionSupplyStatus("route reuse skipped: waypoint stalled");
+                step.running("remembered waypoint stalled");
+                return true;
+            }
             this.body.moveTo(waypoint, TASK_SPEED);
             return true;
         }
@@ -4949,7 +5712,7 @@ public class LocalBehaviorController {
                 continue;
             }
             RememberedBranchRouteResume candidate = new RememberedBranchRouteResume(route, target.get(), anchor.orElse(null), routeType, graphDepth, waypoints);
-            double score = this.scoreRememberedBranchRoute(candidate);
+            double score = this.scoreRememberedBranchRoute(memory, candidate);
             if (best == null
                     || score > bestScore
                     || (score == bestScore && route.updatedAtEpochMillis > best.route().updatedAtEpochMillis)) {
@@ -5055,7 +5818,7 @@ public class LocalBehaviorController {
         return position.dimension + "|" + position.x + "|" + position.y + "|" + position.z;
     }
 
-    private double scoreRememberedBranchRoute(RememberedBranchRouteResume candidate) {
+    private double scoreRememberedBranchRoute(ExpeditionMemory memory, RememberedBranchRouteResume candidate) {
         BlockPos origin = this.expeditionMineEntrance != null
                 ? this.expeditionMineEntrance
                 : (this.expeditionSupplyPoint == null ? this.friend.blockPosition() : this.expeditionSupplyPoint);
@@ -5064,7 +5827,38 @@ public class LocalBehaviorController {
         double completedStepScore = Math.max(0, candidate.route().completedSteps) * 16.0D;
         double graphDepthScore = Math.max(0, candidate.graphDepth()) * 24.0D;
         double typeBonus = "main".equals(candidate.type()) ? 16.0D : 8.0D;
-        return progress + graphDepthScore + completedStepScore + typeBonus - travelPenalty;
+        double resourceHitScore = this.scoreRememberedRouteResourceHits(memory, candidate);
+        return progress + graphDepthScore + completedStepScore + typeBonus + resourceHitScore - travelPenalty;
+    }
+
+    private double scoreRememberedRouteResourceHits(ExpeditionMemory memory, RememberedBranchRouteResume candidate) {
+        if (memory == null || memory.resourceHits == null || memory.resourceHits.isEmpty() || candidate == null) {
+            return 0.0D;
+        }
+        double radiusSqr = EXPEDITION_RESOURCE_HIT_ROUTE_RADIUS * EXPEDITION_RESOURCE_HIT_ROUTE_RADIUS;
+        String dimension = this.currentDimension();
+        double score = 0.0D;
+        for (ExpeditionMemory.ResourceHit hit : memory.resourceHits) {
+            if (hit == null || hit.position == null || !hit.position.isInDimension(dimension)) {
+                continue;
+            }
+            BlockPos hitPos = hit.position.asBlockPos();
+            double targetDistance = candidate.target().distSqr(hitPos);
+            double anchorDistance = candidate.anchor() == null ? Double.MAX_VALUE : candidate.anchor().distSqr(hitPos);
+            double nearestDistance = Math.min(targetDistance, anchorDistance);
+            if (nearestDistance > radiusSqr) {
+                continue;
+            }
+            double proximity = (radiusSqr - nearestDistance) / Math.max(1.0D, radiusSqr);
+            double amountScore = Math.max(1, hit.amount) * 18.0D;
+            double routeTypeScore = candidate.type().equalsIgnoreCase(hit.routeType) ? 24.0D : 0.0D;
+            double directionScore = candidate.route().direction != null
+                    && candidate.route().direction.equalsIgnoreCase(hit.direction)
+                    ? 24.0D
+                    : 0.0D;
+            score += 120.0D * proximity + amountScore + routeTypeScore + directionScore;
+        }
+        return score;
     }
 
     private Optional<ExpeditionMemory> findRememberedExpedition(FriendTask task, String dimension) {
@@ -5427,13 +6221,26 @@ public class LocalBehaviorController {
     }
 
     private void rememberExpeditionMiningSuccess(FriendTask task, String resourceId, int minedAmount) {
+        this.rememberExpeditionMiningSuccess(task, resourceId, minedAmount, this.friend.blockPosition());
+    }
+
+    private void rememberExpeditionMiningSuccess(FriendTask task, String resourceId, int minedAmount, BlockPos hitPos) {
+        BlockPos memoryPos = hitPos == null ? this.friend.blockPosition() : hitPos;
         this.updateExpeditionMemory(task, expedition -> {
             expedition.resourceId = resourceId;
             expedition.status = "target_found";
             expedition.minedAmount = Math.max(expedition.minedAmount, minedAmount);
             expedition.lastKnownPosition = this.positionOf(this.friend.blockPosition());
             expedition.lastTunnelDirection = this.expeditionDirection == null ? expedition.lastTunnelDirection : this.expeditionDirection.getName();
-            expedition.addRouteNote("mined " + resourceId + " at " + this.formatPos(this.friend.blockPosition()));
+            expedition.addRouteNote("mined " + resourceId + " at " + this.formatPos(memoryPos));
+            expedition.addResourceHit(ExpeditionMemory.ResourceHit.create(
+                    resourceId,
+                    this.currentDimension(),
+                    memoryPos,
+                    this.currentExpeditionRouteType(),
+                    this.currentExpeditionRouteDirectionName(),
+                    minedAmount
+            ));
             expedition.addEvent("mined " + resourceId + " count=" + minedAmount);
         });
     }
@@ -5490,8 +6297,12 @@ public class LocalBehaviorController {
     }
 
     private void rememberExpeditionBranchNote(String note) {
+        this.rememberExpeditionRouteNote("branch_mining", note);
+    }
+
+    private void rememberExpeditionRouteNote(String status, String note) {
         this.updateExpeditionMemory(this.friend.getCurrentTask(), expedition -> {
-            expedition.status = "branch_mining";
+            expedition.status = status == null || status.isBlank() ? "route_updated" : status;
             expedition.lastKnownPosition = this.positionOf(this.friend.blockPosition());
             expedition.lastTunnelDirection = this.expeditionDirection == null ? expedition.lastTunnelDirection : this.expeditionDirection.getName();
             expedition.addRouteNote(note);

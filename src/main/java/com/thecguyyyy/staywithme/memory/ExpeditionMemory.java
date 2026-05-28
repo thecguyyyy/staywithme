@@ -10,6 +10,7 @@ public class ExpeditionMemory {
     private static final int MAX_ROUTE_NOTES = 24;
     private static final int MAX_BRANCH_ROUTES = 32;
     private static final int MAX_HAZARDS = 24;
+    private static final int MAX_RESOURCE_HITS = 24;
     private static final int MAX_EVENTS = 32;
 
     public String key;
@@ -35,6 +36,7 @@ public class ExpeditionMemory {
     public List<String> routeNotes = new ArrayList<>();
     public List<BranchRoute> branchRoutes = new ArrayList<>();
     public List<HazardNote> hazards = new ArrayList<>();
+    public List<ResourceHit> resourceHits = new ArrayList<>();
     public List<String> events = new ArrayList<>();
 
     public static ExpeditionMemory create(String resourceId, String dimension) {
@@ -83,6 +85,9 @@ public class ExpeditionMemory {
         if (this.hazards == null) {
             this.hazards = new ArrayList<>();
         }
+        if (this.resourceHits == null) {
+            this.resourceHits = new ArrayList<>();
+        }
         if (this.events == null) {
             this.events = new ArrayList<>();
         }
@@ -102,11 +107,18 @@ public class ExpeditionMemory {
                 hazard.normalize(this.targetDimension);
             }
         });
+        this.resourceHits.forEach(hit -> {
+            if (hit != null) {
+                hit.normalize(this.targetDimension, this.resourceId);
+            }
+        });
         this.branchRoutes.removeIf(route -> route == null);
         this.hazards.removeIf(hazard -> hazard == null);
+        this.resourceHits.removeIf(hit -> hit == null);
         trim(this.routeNotes, MAX_ROUTE_NOTES);
         trim(this.branchRoutes, MAX_BRANCH_ROUTES);
         trim(this.hazards, MAX_HAZARDS);
+        trim(this.resourceHits, MAX_RESOURCE_HITS);
         trim(this.events, MAX_EVENTS);
     }
 
@@ -154,6 +166,31 @@ public class ExpeditionMemory {
         }
         this.hazards.add(hazard);
         trim(this.hazards, MAX_HAZARDS);
+        this.touch();
+    }
+
+    public void addResourceHit(ResourceHit hit) {
+        if (hit == null) {
+            return;
+        }
+        hit.normalize(this.targetDimension, this.resourceId);
+        for (ResourceHit existing : this.resourceHits) {
+            if (existing == null) {
+                continue;
+            }
+            existing.normalize(this.targetDimension, this.resourceId);
+            if (samePosition(existing.position, hit.position)
+                    && existing.resourceId.equalsIgnoreCase(hit.resourceId)) {
+                existing.routeType = hit.routeType;
+                existing.direction = hit.direction;
+                existing.amount = Math.max(existing.amount, hit.amount);
+                existing.updatedAtEpochMillis = System.currentTimeMillis();
+                this.touch();
+                return;
+            }
+        }
+        this.resourceHits.add(hit);
+        trim(this.resourceHits, MAX_RESOURCE_HITS);
         this.touch();
     }
 
@@ -234,6 +271,18 @@ public class ExpeditionMemory {
                     .append(",other=")
                     .append(other)
                     .append(')');
+        }
+        if (!this.resourceHits.isEmpty()) {
+            ResourceHit latest = this.resourceHits.get(this.resourceHits.size() - 1);
+            builder.append(" resourceHits=")
+                    .append(this.resourceHits.size());
+            if (latest != null && latest.position != null) {
+                builder.append("(latest=")
+                        .append(latest.position.summary())
+                        .append(",dir=")
+                        .append(latest.direction == null ? "unknown" : latest.direction)
+                        .append(')');
+            }
         }
         return builder.toString();
     }
@@ -394,6 +443,54 @@ public class ExpeditionMemory {
             if (this.position != null) {
                 this.position.normalize(fallbackDimension);
             }
+            if (this.updatedAtEpochMillis <= 0L) {
+                this.updatedAtEpochMillis = System.currentTimeMillis();
+            }
+        }
+    }
+
+    public static class ResourceHit {
+        public String resourceId;
+        public Position position;
+        public String routeType;
+        public String direction;
+        public int amount;
+        public long updatedAtEpochMillis;
+
+        public static ResourceHit create(
+                String resourceId,
+                String dimension,
+                BlockPos position,
+                String routeType,
+                String direction,
+                int amount
+        ) {
+            ResourceHit hit = new ResourceHit();
+            hit.resourceId = normalizeResource(resourceId);
+            hit.position = Position.of(dimension, position);
+            hit.routeType = routeType == null || routeType.isBlank() ? "unknown" : routeType;
+            hit.direction = direction == null || direction.isBlank() ? "unknown" : direction;
+            hit.amount = Math.max(1, amount);
+            hit.updatedAtEpochMillis = System.currentTimeMillis();
+            return hit;
+        }
+
+        public void normalize(String fallbackDimension, String fallbackResourceId) {
+            if (this.resourceId == null || this.resourceId.isBlank()) {
+                this.resourceId = normalizeResource(fallbackResourceId);
+            } else {
+                this.resourceId = normalizeResource(this.resourceId);
+            }
+            if (this.position != null) {
+                this.position.normalize(fallbackDimension);
+            }
+            if (this.routeType == null || this.routeType.isBlank()) {
+                this.routeType = "unknown";
+            }
+            if (this.direction == null || this.direction.isBlank()) {
+                this.direction = "unknown";
+            }
+            this.amount = Math.max(1, this.amount);
             if (this.updatedAtEpochMillis <= 0L) {
                 this.updatedAtEpochMillis = System.currentTimeMillis();
             }

@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 public class FriendMemory {
-    public int schemaVersion = 4;
+    public int schemaVersion = 5;
     public String playerUuid;
     public String playerName;
     public String companionId;
@@ -35,7 +35,7 @@ public class FriendMemory {
     }
 
     public void normalize(String fallbackPlayerUuid, String fallbackPlayerName) {
-        this.schemaVersion = Math.max(4, this.schemaVersion);
+        this.schemaVersion = Math.max(5, this.schemaVersion);
         if (this.playerUuid == null || this.playerUuid.isBlank()) {
             this.playerUuid = fallbackPlayerUuid;
         }

@@ -85,6 +85,7 @@ public final class StayWithMeCommands {
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> craftItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
                         .then(Commands.literal("status").executes(StayWithMeCommands::status))
+                        .then(Commands.literal("expeditionstatus").executes(StayWithMeCommands::expeditionStatus))
                         .then(Commands.literal("observe").executes(StayWithMeCommands::observe))
                         .then(Commands.literal("integrations").executes(StayWithMeCommands::integrations))
                         .then(Commands.literal("recipes")
@@ -381,6 +382,22 @@ public final class StayWithMeCommands {
                         + ", hunger={" + entity.getHungerProvider().summary() + "}"
                         + ", perception={" + entity.getPerception().refreshNow().summary() + "}"
                         + ", task=" + entity.getTaskSummary()),
+                false
+        );
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int expeditionStatus(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        Optional<FriendEntity> friend = findNearestFriend(player);
+        if (friend.isEmpty()) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+
+        FriendEntity entity = friend.get();
+        context.getSource().sendSuccess(
+                () -> Component.literal("Expedition={" + entity.getFriendBrain().getExpeditionStatus() + "}"),
                 false
         );
         return Command.SINGLE_SUCCESS;

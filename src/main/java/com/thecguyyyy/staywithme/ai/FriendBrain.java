@@ -72,6 +72,10 @@ public class FriendBrain {
         return this.localController.getControllerStatus();
     }
 
+    public String getExpeditionStatus() {
+        return this.localController.getExpeditionStatus();
+    }
+
     private static EmbodiedController createEmbodiedController(FriendEntity friend) {
         if (StayWithMeConfig.USE_PLAYERENGINE_CONTROLLER.get() && IntegrationStatus.isPlayerEngineLoaded()) {
             return new PlayerEngineEmbodiedController(friend);
