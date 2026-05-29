@@ -18,7 +18,7 @@ import java.util.UUID;
 public class FriendPerception {
     private static final int REFRESH_INTERVAL_TICKS = 10;
     private static final int ENTITY_RADIUS = 16;
-    private static final int BLOCK_RADIUS = 18;
+    private static final int BLOCK_RADIUS = 50;
     private static final int BLOCK_SEARCH_DOWN = 4;
     private static final int BLOCK_SEARCH_UP = 8;
 

@@ -64,8 +64,11 @@ public class MineActionAdapter {
                 return MineResult.WORKING_PLAYERENGINE;
             }
 
-            BlockPos approach = approachTarget.get().orElse(target);
-            this.body.moveTo(approach, speed);
+            Optional<BlockPos> approach = approachTarget.get();
+            if (approach.isEmpty()) {
+                return MineResult.FAILED;
+            }
+            this.body.moveTo(approach.get(), speed);
             return MineResult.WORKING_FALLBACK;
         }
 

@@ -25,33 +25,30 @@ public class PlayerEngineEmbodiedController implements EmbodiedController {
 
     @Override
     public String name() {
-        return this.playerEngine.controllerName();
+        return this.playerEngine.isPathingAvailable() ? "forge_native_with_playerengine_bridge" : "forge_native";
     }
 
     @Override
     public String status() {
-        return this.playerEngine.status();
+        return this.playerEngine.status() + ", nativeMovement=active, peActions=disabled_until_entity_bound";
     }
 
     @Override
     public void stop() {
-        if (!this.playerEngine.stop()) {
-            this.fallback.stop();
-        }
+        this.playerEngine.stop();
+        this.fallback.stop();
     }
 
     @Override
     public void moveTo(double x, double y, double z, double speed) {
-        if (!this.playerEngine.moveTo(x, y, z)) {
-            this.fallback.moveTo(x, y, z, speed);
-        }
+        this.playerEngine.stop();
+        this.fallback.moveTo(x, y, z, speed);
     }
 
     @Override
     public void moveTo(Entity target, double speed) {
-        if (!this.playerEngine.follow(target)) {
-            this.fallback.moveTo(target, speed);
-        }
+        this.playerEngine.stop();
+        this.fallback.moveTo(target, speed);
     }
 
     @Override
@@ -74,11 +71,11 @@ public class PlayerEngineEmbodiedController implements EmbodiedController {
 
     @Override
     public boolean mineBlocks(int count, Block... blocks) {
-        return this.playerEngine.mineBlocks(count, blocks);
+        return false;
     }
 
     @Override
     public boolean isMining() {
-        return this.playerEngine.isMining();
+        return false;
     }
 }

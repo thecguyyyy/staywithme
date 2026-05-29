@@ -43,6 +43,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.pathfinder.Path;
 
 import java.util.Optional;
 import java.util.Objects;
@@ -60,6 +61,9 @@ public class LocalBehaviorController {
     private static final double FOLLOW_SPEED = 1.1D;
     private static final double TASK_SPEED = 1.0D;
     private static final int SEARCH_RADIUS = 16;
+    private static final int WOOD_SEARCH_RADIUS = 50;
+    private static final int WOOD_SEARCH_DOWN = 8;
+    private static final int WOOD_SEARCH_UP = 16;
     private static final int WORKFLOW_TIMEOUT_TICKS = 20 * 600;
     private static final int BRANCH_MAIN_SEGMENT_LENGTH = 12;
     private static final int BRANCH_SIDE_LENGTH = 5;
@@ -77,6 +81,11 @@ public class LocalBehaviorController {
     private static final double EXPEDITION_RESOURCE_HIT_ROUTE_RADIUS = 24.0D;
     private static final double EXPEDITION_RESOURCE_DIRECTION_SCORE_MARGIN = 4.0D;
     private static final int EXPEDITION_KNOWN_HAZARD_CACHE_SIZE = 24;
+    private static final int WOOD_EXPLORE_STEP = 28;
+    private static final int WOOD_EXPLORE_ATTEMPTS_PER_TICK = 64;
+    private static final int WOOD_EXPLORE_VERTICAL_DOWN = 16;
+    private static final int WOOD_EXPLORE_VERTICAL_UP = 16;
+    private static final int WOOD_EXPLORE_STALL_TICKS = 20 * 20;
     private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
             Direction.NORTH,
             Direction.EAST,
@@ -122,6 +131,12 @@ public class LocalBehaviorController {
     private int attackCooldownTicks;
     private int workMessageCooldownTicks;
     private BlockPos woodTarget;
+    private BlockPos woodExploreOrigin;
+    private BlockPos woodExploreTarget;
+    private BlockPos woodExploreLastPos;
+    private int woodExploreStallTicks;
+    private int woodExploreCursor;
+    private int woodExploreRotation;
     private BlockPos resourceTarget;
     private String resourceTargetKind;
     private BlockPos expeditionDigTarget;
@@ -214,6 +229,7 @@ public class LocalBehaviorController {
         this.attackCooldownTicks = 0;
         this.workMessageCooldownTicks = 0;
         this.woodTarget = null;
+        this.resetWoodExploreTarget();
         this.resourceTarget = null;
         this.resourceTargetKind = null;
         this.expeditionDigTarget = null;
@@ -326,6 +342,7 @@ public class LocalBehaviorController {
 
     public void stopTransientTargets() {
         this.woodTarget = null;
+        this.resetWoodExploreTarget();
         this.resourceTarget = null;
         this.resourceTargetKind = null;
         this.expeditionDigTarget = null;
@@ -1737,47 +1754,6 @@ public class LocalBehaviorController {
             return false;
         }
 
-        MineActionAdapter.MineResult result = this.mineAdapter.mineAny(
-                serverLevel,
-                target.inventoryMatcher(),
-                Math.max(1, step.amount() - current),
-                target.sourceBlocks()
-        );
-        if (result == MineActionAdapter.MineResult.WORKING_PLAYERENGINE) {
-            step.running("PlayerEngine searching/mining " + target.displayName());
-            this.sayThrottled("PlayerEngine is searching for " + target.displayName() + ".");
-            return false;
-        }
-        if (result == MineActionAdapter.MineResult.BROKEN) {
-            int minedCount = this.friend.countInventoryItems(target.inventoryMatcher());
-            if (minedCount <= current) {
-                step.running("continuing branch mining");
-                return false;
-            }
-            this.rememberResourceKnowledge(
-                    step.target(),
-                    "Observed progress: branch/expedition mining obtained " + target.displayName() + " at Y " + this.friend.blockPosition().getY() + ".",
-                    "observed_expedition_mining"
-            );
-            this.rememberPortableNote(this.friend.getCurrentTask(), "expedition mined "
-                    + target.resourceId()
-                    + " amount="
-                    + minedCount
-                    + " pos="
-                    + this.formatPos(this.friend.blockPosition()));
-            this.rememberExpeditionMiningSuccess(
-                    this.friend.getCurrentTask(),
-                    target.resourceId(),
-                    minedCount
-            );
-            if (minedCount >= step.amount()) {
-                this.workflow.completeCurrent("mined " + target.displayName());
-                return true;
-            }
-            step.running("continuing branch mining for " + target.displayName());
-            return false;
-        }
-
         step.running("digging branch tunnel");
         this.updateTunnelTorchProgress();
         this.tryPlaceExpeditionTorch(serverLevel, step);
@@ -2211,12 +2187,14 @@ public class LocalBehaviorController {
             return false;
         }
 
-        if (this.woodTarget == null || !isBreakableLog(serverLevel, this.woodTarget)) {
-            this.woodTarget = this.friend.getPerception().nearestBreakableLog(SEARCH_RADIUS).orElse(null);
+        if (this.woodTarget == null
+                || !isBreakableLog(serverLevel, this.woodTarget)
+                || !this.isReachableMiningTarget(serverLevel, this.woodTarget)) {
+            this.woodTarget = this.findNearestReachableLog(serverLevel, WOOD_SEARCH_RADIUS).orElse(null);
             if (this.woodTarget == null) {
-                this.friend.getFriendBrain().failTask("I do not see any logs nearby.");
-                return false;
+                return this.exploreForWood(serverLevel);
             }
+            this.resetWoodExploreTarget();
             this.say("I found a log at " + this.formatPos(this.woodTarget) + ".");
         }
 
@@ -2237,6 +2215,7 @@ public class LocalBehaviorController {
             case BROKEN -> {
                 this.say("Collected wood. Inventory: " + this.friend.getInventorySummary());
                 this.woodTarget = null;
+                this.resetWoodExploreTarget();
                 return true;
             }
             case FAILED -> {
@@ -2273,41 +2252,50 @@ public class LocalBehaviorController {
         String targetKind = step.target();
         if (!targetKind.equals(this.resourceTargetKind)
                 || this.resourceTarget == null
-                || !this.isMineableSource(serverLevel, this.resourceTarget, sourceBlocks)) {
+                || !this.isVisibleMineableSource(serverLevel, this.resourceTarget, sourceBlocks)) {
             this.resourceTarget = this.findNearestMineableSource(serverLevel, 18, sourceBlocks).orElse(null);
             this.resourceTargetKind = targetKind;
         }
 
         if (this.resourceTarget == null) {
-            MineActionAdapter.MineResult result = this.mineAdapter.mineAny(
-                    serverLevel,
-                    inventoryMatcher,
-                    Math.max(1, step.amount() - current),
-                    sourceBlocks
-            );
-            if (result == MineActionAdapter.MineResult.WORKING_PLAYERENGINE) {
-                step.running("PlayerEngine mining " + displayName);
-                this.sayThrottled("Using PlayerEngine to mine " + displayName + ".");
-                return false;
-            }
             step.running("searching for " + displayName);
-            this.sayThrottled("I need " + displayName + ", but I do not see a mineable block nearby.");
+            this.sayThrottled("I need " + displayName + ", but I do not see an exposed reachable block nearby.");
             return false;
         }
 
         double distance = this.friend.getEyePosition().distanceTo(net.minecraft.world.phys.Vec3.atCenterOf(this.resourceTarget));
+        Optional<BlockPos> approachTarget = Optional.empty();
         if (!this.interaction.canReachBlock(this.resourceTarget)) {
+            approachTarget = this.findStandPositionNearBlock(serverLevel, this.resourceTarget);
+            if (approachTarget.isEmpty()) {
+                this.resourceTarget = null;
+                step.running("searching for reachable " + displayName);
+                this.sayThrottled("That " + displayName + " is not reachable like a survival player. Looking for another target.");
+                return false;
+            }
+            if (this.friend.getCurrentTask() != null
+                    && this.friend.getCurrentTask().type() == FriendTaskType.MINING_EXPEDITION
+                    && this.isExpeditionMoveStalled(approachTarget.get(), "approach " + displayName)) {
+                this.body.stop();
+                this.resourceTarget = null;
+                step.running("approach to " + displayName + " stalled");
+                this.setExpeditionSupplyStatus("searching: approach stalled");
+                this.sayThrottled("I cannot reach that " + displayName + " safely, so I am looking for another route.");
+                return false;
+            }
             step.running("moving to " + displayName);
             this.sayThrottled("Moving to " + displayName + " at " + this.formatPos(this.resourceTarget) + " (" + Math.round(distance) + " blocks away).");
         } else {
+            this.resetExpeditionMoveWatch();
             step.running("mining " + displayName);
         }
 
+        Optional<BlockPos> cachedApproachTarget = approachTarget;
         MineActionAdapter.MineResult result = this.mineAdapter.mineOne(
                 serverLevel,
                 this.resourceTarget,
                 inventoryMatcher,
-                () -> this.findStandPositionNearBlock(serverLevel, this.resourceTarget),
+                () -> cachedApproachTarget.isPresent() ? cachedApproachTarget : this.findStandPositionNearBlock(serverLevel, this.resourceTarget),
                 TASK_SPEED,
                 sourceBlocks
         );
@@ -4806,18 +4794,30 @@ public class LocalBehaviorController {
     }
 
     private Optional<BlockPos> findNearestMineableSource(ServerLevel level, int radius, Block... sourceBlocks) {
-        return this.findNearestBlock(level, radius, pos -> this.isMineableSource(level, pos, sourceBlocks));
+        return this.findNearestBlock(level, radius,
+                pos -> this.isVisibleMineableSource(level, pos, sourceBlocks));
+    }
+
+    private Optional<BlockPos> findNearestReachableLog(ServerLevel level, int radius) {
+        return this.findNearestBlock(level, radius, WOOD_SEARCH_DOWN, WOOD_SEARCH_UP,
+                pos -> isBreakableLog(level, pos)
+                        && this.isExposedTargetBlock(level, pos)
+                        && this.isReachableMiningTarget(level, pos));
     }
 
     private Optional<BlockPos> findNearestBlock(ServerLevel level, int radius, Predicate<BlockPos> predicate) {
+        return this.findNearestBlock(level, radius, radius, radius, predicate);
+    }
+
+    private Optional<BlockPos> findNearestBlock(ServerLevel level, int horizontalRadius, int down, int up, Predicate<BlockPos> predicate) {
         BlockPos center = this.friend.blockPosition();
         BlockPos best = null;
         double bestDistance = Double.MAX_VALUE;
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-        for (int y = -radius; y <= radius; y++) {
-            for (int x = -radius; x <= radius; x++) {
-                for (int z = -radius; z <= radius; z++) {
+        for (int y = -down; y <= up; y++) {
+            for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
+                for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
                     cursor.set(center.getX() + x, center.getY() + y, center.getZ() + z);
                     if (!predicate.test(cursor)) {
                         continue;
@@ -4836,6 +4836,31 @@ public class LocalBehaviorController {
     private boolean isMineableSource(ServerLevel level, BlockPos pos, Block... sourceBlocks) {
         for (Block block : sourceBlocks) {
             if (level.getBlockState(pos).is(block)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isVisibleMineableSource(ServerLevel level, BlockPos pos, Block... sourceBlocks) {
+        return this.isMineableSource(level, pos, sourceBlocks)
+                && this.isExposedTargetBlock(level, pos)
+                && this.isReachableMiningTarget(level, pos);
+    }
+
+    private boolean isReachableMiningTarget(ServerLevel level, BlockPos pos) {
+        return this.interaction.canReachBlock(pos) || this.findStandPositionNearBlock(level, pos).isPresent();
+    }
+
+    private boolean isExposedTargetBlock(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacent = pos.relative(direction);
+            BlockState adjacentState = level.getBlockState(adjacent);
+            if (adjacentState.getCollisionShape(level, adjacent).isEmpty()
+                    && adjacentState.getFluidState().isEmpty()) {
                 return true;
             }
         }
@@ -5234,6 +5259,12 @@ public class LocalBehaviorController {
                     if (!this.canStandAt(level, candidate)) {
                         continue;
                     }
+                    if (!this.interaction.canReachBlockFrom(candidate, target)) {
+                        continue;
+                    }
+                    if (!this.canNavigateToStandPosition(candidate)) {
+                        continue;
+                    }
                     double distanceToFriend = this.friend.blockPosition().distSqr(candidate);
                     if (distanceToFriend < bestDistance) {
                         bestDistance = distanceToFriend;
@@ -5243,6 +5274,136 @@ public class LocalBehaviorController {
             }
         }
         return Optional.ofNullable(best);
+    }
+
+    private boolean exploreForWood(ServerLevel level) {
+        if (this.woodExploreTarget == null
+                || !this.canStandAt(level, this.woodExploreTarget)
+                || this.friend.blockPosition().distSqr(this.woodExploreTarget) <= 9.0D
+                || this.isWoodExploreMovementStalled()) {
+            this.woodExploreTarget = this.findWoodExploreTarget(level).orElse(null);
+            this.woodExploreLastPos = this.friend.blockPosition().immutable();
+            this.woodExploreStallTicks = 0;
+            if (this.woodExploreTarget == null) {
+                this.sayThrottled("I do not see any reachable logs nearby and cannot find a safe place to explore toward.");
+                return false;
+            }
+            this.sayThrottled("I do not see reachable logs nearby, so I am exploring toward "
+                    + this.formatPos(this.woodExploreTarget)
+                    + ".");
+        }
+
+        this.body.moveTo(this.woodExploreTarget, TASK_SPEED);
+        return false;
+    }
+
+    private Optional<BlockPos> findWoodExploreTarget(ServerLevel level) {
+        if (this.woodExploreOrigin == null) {
+            this.woodExploreOrigin = this.friend.blockPosition().immutable();
+            this.woodExploreCursor = 0;
+            this.woodExploreRotation = this.friend.getRandom().nextInt(4);
+        }
+
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (int attempt = 0; attempt < WOOD_EXPLORE_ATTEMPTS_PER_TICK; attempt++) {
+            BlockPos offset = this.nextWoodExploreOffset();
+            int x = this.woodExploreOrigin.getX() + offset.getX();
+            int z = this.woodExploreOrigin.getZ() + offset.getZ();
+            Optional<BlockPos> stand = this.findWoodExploreStandPosition(level, x, z);
+            if (stand.isEmpty()) {
+                continue;
+            }
+            double distance = this.friend.blockPosition().distSqr(stand.get());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = stand.get().immutable();
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private BlockPos nextWoodExploreOffset() {
+        int remaining = this.woodExploreCursor++;
+        int ring = 1;
+        while (remaining >= ring * 8) {
+            remaining -= ring * 8;
+            ring++;
+        }
+
+        int sideLength = ring * 2;
+        int side = remaining / sideLength;
+        int step = remaining % sideLength;
+        int dx;
+        int dz;
+        switch (side) {
+            case 0 -> {
+                dx = ring;
+                dz = -ring + step;
+            }
+            case 1 -> {
+                dx = ring - step;
+                dz = ring;
+            }
+            case 2 -> {
+                dx = -ring;
+                dz = ring - step;
+            }
+            default -> {
+                dx = -ring + step;
+                dz = -ring;
+            }
+        }
+
+        for (int rotation = 0; rotation < this.woodExploreRotation; rotation++) {
+            int rotated = dx;
+            dx = -dz;
+            dz = rotated;
+        }
+        return new BlockPos(dx * WOOD_EXPLORE_STEP, 0, dz * WOOD_EXPLORE_STEP);
+    }
+
+    private Optional<BlockPos> findWoodExploreStandPosition(ServerLevel level, int x, int z) {
+        int baseY = this.woodExploreOrigin == null ? this.friend.blockPosition().getY() : this.woodExploreOrigin.getY();
+        for (int yOffset = WOOD_EXPLORE_VERTICAL_UP; yOffset >= -WOOD_EXPLORE_VERTICAL_DOWN; yOffset--) {
+            BlockPos candidate = new BlockPos(x, baseY + yOffset, z);
+            if (!level.hasChunkAt(candidate) || !this.canStandAt(level, candidate) || !this.canNavigateToStandPosition(candidate)) {
+                continue;
+            }
+            return Optional.of(candidate.immutable());
+        }
+        return Optional.empty();
+    }
+
+    private boolean isWoodExploreMovementStalled() {
+        BlockPos current = this.friend.blockPosition().immutable();
+        if (this.woodExploreLastPos == null || !current.equals(this.woodExploreLastPos)) {
+            this.woodExploreLastPos = current;
+            this.woodExploreStallTicks = 0;
+            return false;
+        }
+        this.woodExploreStallTicks++;
+        return this.woodExploreStallTicks >= WOOD_EXPLORE_STALL_TICKS;
+    }
+
+    private void resetWoodExploreTarget() {
+        this.woodExploreOrigin = null;
+        this.woodExploreTarget = null;
+        this.woodExploreLastPos = null;
+        this.woodExploreStallTicks = 0;
+        this.woodExploreCursor = 0;
+        this.woodExploreRotation = 0;
+    }
+
+    private boolean canNavigateToStandPosition(BlockPos candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        if (this.friend.blockPosition().distSqr(candidate) <= 2.25D) {
+            return true;
+        }
+        Path path = this.friend.getNavigation().createPath(candidate, 0);
+        return path != null && path.canReach();
     }
 
     private boolean canStandAt(ServerLevel level, BlockPos pos) {

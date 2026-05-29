@@ -27,6 +27,10 @@ public class FriendInteractionProvider {
         return this.fallback.canReachBlock(pos);
     }
 
+    public boolean canReachBlockFrom(BlockPos feetPos, BlockPos target) {
+        return this.fallback.canReachBlockFrom(feetPos, target);
+    }
+
     public SurvivalWorldInteractor.BreakResult tickBreakBlock(ServerLevel level, BlockPos pos) {
         return this.fallback.tickBreakBlockToInventory(level, pos);
     }

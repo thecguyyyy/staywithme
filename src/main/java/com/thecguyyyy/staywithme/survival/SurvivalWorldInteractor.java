@@ -2,12 +2,16 @@ package com.thecguyyyy.staywithme.survival;
 
 import com.thecguyyyy.staywithme.entity.FriendEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
@@ -31,9 +35,19 @@ public class SurvivalWorldInteractor {
     }
 
     public boolean canReachBlock(BlockPos pos) {
-        Vec3 eye = this.friend.getEyePosition();
-        Vec3 center = Vec3.atCenterOf(pos);
-        return eye.distanceToSqr(center) <= BLOCK_REACH_SQR;
+        if (!(this.friend.level() instanceof ServerLevel level)) {
+            return false;
+        }
+        return this.canReachBlockFromEye(level, this.friend.getEyePosition(), pos);
+    }
+
+    public boolean canReachBlockFrom(BlockPos feetPos, BlockPos target) {
+        if (!(this.friend.level() instanceof ServerLevel level)) {
+            return false;
+        }
+        double eyeOffset = Math.max(0.1D, this.friend.getEyePosition().y - this.friend.getY());
+        Vec3 eye = Vec3.atBottomCenterOf(feetPos).add(0.0D, eyeOffset, 0.0D);
+        return this.canReachBlockFromEye(level, eye, target);
     }
 
     public BreakResult tickBreakBlockToInventory(ServerLevel level, BlockPos pos) {
@@ -167,6 +181,57 @@ public class SurvivalWorldInteractor {
         this.breakingPos = null;
         this.breakingProgress = 0.0F;
         this.breakingTicks = 0;
+    }
+
+    private boolean canReachBlockFromEye(ServerLevel level, Vec3 eye, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        if (state.canBeReplaced() && state.getCollisionShape(level, pos).isEmpty()) {
+            return this.canReachOpenPositionFromEye(level, eye, Vec3.atCenterOf(pos));
+        }
+
+        Vec3 center = Vec3.atCenterOf(pos);
+        if (this.canHitTargetBlock(level, eye, center, pos)) {
+            return true;
+        }
+        for (Direction direction : Direction.values()) {
+            Vec3 faceCenter = center.add(
+                    direction.getStepX() * 0.5D,
+                    direction.getStepY() * 0.5D,
+                    direction.getStepZ() * 0.5D
+            );
+            if (this.canHitTargetBlock(level, eye, faceCenter, pos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean canReachOpenPositionFromEye(ServerLevel level, Vec3 eye, Vec3 target) {
+        if (eye.distanceToSqr(target) > BLOCK_REACH_SQR) {
+            return false;
+        }
+        BlockHitResult hit = level.clip(new ClipContext(
+                eye,
+                target,
+                ClipContext.Block.OUTLINE,
+                ClipContext.Fluid.NONE,
+                this.friend
+        ));
+        return hit.getType() == HitResult.Type.MISS;
+    }
+
+    private boolean canHitTargetBlock(ServerLevel level, Vec3 eye, Vec3 target, BlockPos pos) {
+        if (eye.distanceToSqr(target) > BLOCK_REACH_SQR) {
+            return false;
+        }
+        BlockHitResult hit = level.clip(new ClipContext(
+                eye,
+                target,
+                ClipContext.Block.OUTLINE,
+                ClipContext.Fluid.NONE,
+                this.friend
+        ));
+        return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos);
     }
 
     public enum BreakResult {
