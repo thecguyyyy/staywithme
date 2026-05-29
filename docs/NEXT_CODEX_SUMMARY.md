@@ -8,7 +8,7 @@
 - Java: 17
 - Main package: `com.thecguyyyy.staywithme`
 - Current build command: `.\gradlew.bat build`
-- Last verified result: build passes.
+- Last verified result: build passes on 2026-05-29 after the command resource-id update.
 - Manual reload-resume checklist: `docs/RELOAD_RESUME_TESTS.md`
 
 ## Current Direction
@@ -21,8 +21,8 @@ Core principle:
 player natural language / command
   -> LLM or local fallback produces structured task/strategy JSON
   -> local workflow/controller executes deterministic actions
-  -> PlayerEngine/Baritone is used when available
-  -> Forge survival fallback keeps the mod runnable without external runtime mods
+  -> Forge-native survival executor performs current movement/mining
+  -> guarded PlayerEngine/Baritone adapters stay optional for future bound-runtime use
 ```
 
 Do not make the LLM issue per-tick movement, camera, or block-breaking instructions.
@@ -73,7 +73,8 @@ The companion can:
   - iron ingot
   - iron pickaxe
 - Use a real placed furnace block entity for iron smelting.
-- Mine known resources with PlayerEngine/Baritone first, survival fallback second.
+- Mine known resources with the Forge-native survival executor.
+- Discover nearby resources through visible/reachable world checks instead of buried-resource scans.
 - Keep survival constraints for fallback mining:
   - correct tool is required for blocks that need one
   - tool durability is consumed
@@ -87,7 +88,7 @@ The companion can:
   - avoid digging straight down
   - avoid adjacent lava/fluid hazards
   - place torches in dark tunnels when available
-  - branch mine using PlayerEngine/Baritone or local two-high tunnel fallback
+  - branch mine with local two-high tunnel digging and opportunistic visible-target mining
   - return to supply point when inventory is nearly full
   - unload non-essential items to supply chest while keeping tools, torches, and target resources
   - return to supply point for low health recovery, temporary hostile-threat retreat, or lava reroute, and pause if recovery is unavailable, hostile threat does not clear, the return point is unsafe, or the task is explicitly cancelled
@@ -130,8 +131,9 @@ Important classes:
 
 Current behavior:
 
-- If config enables PlayerEngine and it is loaded, movement/pathing/mining can use PlayerEngine/Automatone/Baritone.
-- If PlayerEngine is unavailable or fails, fallback remains Forge-native.
+- Current movement/mining is Forge-native.
+- PlayerEngine/Automatone/Baritone calls are guarded and disabled until the companion has a valid bound player-entity runtime.
+- If PlayerEngine is unavailable or fails, execution remains Forge-native.
 - `FriendEntity` does not directly implement external PlayerEngine interfaces, to keep runtime safe without PlayerEngine.
 
 ## Workflow System
@@ -196,6 +198,10 @@ Current memory supports:
 
 Recent change:
 
+- Resource/item command arguments now use Minecraft resource-location parsing, so namespaced IDs such as `minecraft:diamond` work in `/staywithme mine`, `/staywithme mineplan`, `/staywithme expedition`, `/staywithme craft`, `/staywithme oreinfo`, and `/staywithme memory learnresource`.
+- Survival resource discovery is visibility-limited. Local execution should not scan buried ore as if using xray; exposed target blocks are checked with reach/ray validation before mining.
+- Wood gathering searches a 101x101 horizontal area for exposed/reachable logs. If no reachable wood is found, it advances through deterministic randomized ring exploration instead of pure back-and-forth random walking.
+- Current movement/mining remains Forge-native while the PlayerEngine adapter waits for valid entity binding.
 - Mining expeditions now write portable notes for:
   - expedition start
   - supply chest reused/placed
@@ -262,7 +268,7 @@ Recent change:
 - Expedition passage movement can now repair simple one-block floor gaps with carried expendable vanilla blocks before rotating away. It only uses non-target cobblestone, cobbled deepslate, dirt, or netherrack, requires a safe sturdy support below the gap, and still refuses fluid/lava/risky-block cases.
 - Mining expedition safety now treats immediate adjacent lava as an active reroute trigger. If the companion is next to lava during an expedition, it records the hazard origin, returns to the supply point, interrupts the current branch/stair direction at the hazard position, clears remembered route resume state, rotates direction, and resumes instead of immediately completing the task. If the supply return point is also unsafe, it pauses. `/staywithme status` exposes `lavaReroute` and `lavaOrigin`.
 - Expedition hazard avoidance is now partly structured. `ExpeditionMemory` stores bounded hazard notes with type and position for lava/risky-block avoidance, and remembered branch route reuse invalidates or skips completed route candidates whose endpoint, side anchor, or waypoint chain is too close to a remembered hazard. Active staircase/branch digging also keeps a bounded in-task hazard cache and rotates before stepping into known danger zones. `/staywithme status` exposes `knownHazards`; `/staywithme memory` summaries include hazard counts by type.
-- Expedition memory now records bounded target resource hit points with resource id, position, route type, direction, and observed amount. Visible target blocks mined during branch mining now write the same success memory as PlayerEngine/Baritone mining, and PlayerEngine/Baritone branch mining records partial inventory gains instead of waiting until the full requested amount is reached. Remembered route scoring is biased toward completed routes near prior resource hits, new branch mining can choose an initial main direction from remembered hit evidence, new side branches can choose the side direction with stronger resource-hit evidence instead of only alternating left/right, and main/staircase direction rotation can prefer the counter-clockwise alternative when prior hits clearly favor it over the default clockwise turn. `/staywithme status` exposes the remembered resource-hit count while an expedition task is active.
+- Expedition memory now records bounded target resource hit points with resource id, position, route type, direction, and observed amount. Visible target blocks mined during branch mining write success memory as local mining progresses, and remembered route scoring is biased toward completed routes near prior resource hits. New branch mining can choose an initial main direction from remembered hit evidence, new side branches can choose the side direction with stronger resource-hit evidence instead of only alternating left/right, and main/staircase direction rotation can prefer the counter-clockwise alternative when prior hits clearly favor it over the default clockwise turn. `/staywithme status` exposes the remembered resource-hit count while an expedition task is active.
 - `FriendEntity` now persists the active `FriendTask` into entity NBT, including task type, player UUID/name, target, amount, message JSON, and reason. On entity reload, it delays restoration until the next server tick and then restarts the task through `FriendBrain`, letting the existing workflow and `ExpeditionMemory` route reuse rebuild transient controller state.
 - Reload resume now validates ownership before restarting the saved task. If the saved task has a player UUID, the entity owner must match and the player must currently be available on the server; otherwise the task is not resumed and the companion enters error state with a message. Successful restoration also sends a visible "Resumed saved task after reload" message through the normal companion chat path.
 - Reload resume now also persists first-pass workflow progress. When an active task is saved, `FriendEntity` writes `ControllerState` with the current workflow id and step index. On reload, `LocalBehaviorController` restores that index only if the recovered task type, target, amount, and recreated workflow id still match, so completed preparation steps are not restarted unnecessarily.
@@ -290,7 +296,7 @@ This is still intentionally simple. Future work should deepen active expedition 
 - Combat remains basic.
 - The companion cannot travel across dimensions by itself.
 - Modpack support is not pluginized yet.
-- PlayerEngine full controller is not deeply bound; current use is guarded pathing/mining adapter.
+- PlayerEngine full controller is not deeply bound; current pathing/mining adapter is guarded and effectively disabled until valid entity binding exists.
 
 ## Recommended Next Steps
 

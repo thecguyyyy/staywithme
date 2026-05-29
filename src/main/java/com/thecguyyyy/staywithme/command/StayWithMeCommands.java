@@ -22,6 +22,7 @@ import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import com.thecguyyyy.staywithme.util.JsonUtils;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.ResourceLocationArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
@@ -65,22 +66,22 @@ public final class StayWithMeCommands {
                         .then(Commands.literal("ironpickaxe").executes(StayWithMeCommands::ironPickaxe))
                         .then(Commands.literal("ironpick").executes(StayWithMeCommands::ironPickaxe))
                         .then(Commands.literal("mine")
-                                .then(Commands.argument("resource", StringArgumentType.word())
+                                .then(Commands.argument("resource", ResourceLocationArgument.id())
                                         .executes(context -> mineResource(context, 1))
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> mineResource(context, IntegerArgumentType.getInteger(context, "amount"))))))
                         .then(Commands.literal("mineplan")
-                                .then(Commands.argument("resource", StringArgumentType.word())
+                                .then(Commands.argument("resource", ResourceLocationArgument.id())
                                         .executes(context -> minePlan(context, 1))
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> minePlan(context, IntegerArgumentType.getInteger(context, "amount"))))))
                         .then(Commands.literal("expedition")
-                                .then(Commands.argument("resource", StringArgumentType.word())
+                                .then(Commands.argument("resource", ResourceLocationArgument.id())
                                         .executes(context -> miningExpedition(context, 1))
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> miningExpedition(context, IntegerArgumentType.getInteger(context, "amount"))))))
                         .then(Commands.literal("craft")
-                                .then(Commands.argument("item", StringArgumentType.word())
+                                .then(Commands.argument("item", ResourceLocationArgument.id())
                                         .executes(context -> craftItem(context, 1))
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> craftItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
@@ -93,7 +94,7 @@ public final class StayWithMeCommands {
                                 .then(Commands.argument("query", StringArgumentType.greedyString())
                                         .executes(StayWithMeCommands::recipesQuery)))
                         .then(Commands.literal("oreinfo")
-                                .then(Commands.argument("resource", StringArgumentType.word())
+                                .then(Commands.argument("resource", ResourceLocationArgument.id())
                                         .executes(StayWithMeCommands::oreInfo)))
                         .then(Commands.literal("memory")
                                 .executes(StayWithMeCommands::memory)
@@ -102,7 +103,7 @@ public final class StayWithMeCommands {
                                         .then(Commands.argument("file", StringArgumentType.word())
                                                 .executes(StayWithMeCommands::memoryImport)))
                                 .then(Commands.literal("learnresource")
-                                        .then(Commands.argument("resource", StringArgumentType.word())
+                                        .then(Commands.argument("resource", ResourceLocationArgument.id())
                                                 .then(Commands.argument("hint", StringArgumentType.greedyString())
                                                         .executes(StayWithMeCommands::memoryLearnResource)))))
                         .then(Commands.literal("ask")
@@ -197,7 +198,7 @@ public final class StayWithMeCommands {
     }
 
     private static int craftItem(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
-        String rawItem = StringArgumentType.getString(context, "item");
+        String rawItem = commandResourceId(context, "item");
         ResourceLocation itemId = parseItemId(rawItem);
         if (itemId == null) {
             context.getSource().sendFailure(Component.literal("Invalid item id: " + rawItem));
@@ -228,7 +229,7 @@ public final class StayWithMeCommands {
     }
 
     private static int mineResource(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
-        String rawResource = StringArgumentType.getString(context, "resource");
+        String rawResource = commandResourceId(context, "resource");
         String normalized = MiningTargetRegistry.normalize(rawResource);
         Optional<MiningTargetRegistry.MiningTarget> miningTarget = MiningTargetRegistry.find(normalized);
         if (miningTarget.isEmpty()) {
@@ -268,7 +269,7 @@ public final class StayWithMeCommands {
 
     private static int minePlan(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-        String rawResource = StringArgumentType.getString(context, "resource");
+        String rawResource = commandResourceId(context, "resource");
         String normalized = MiningTargetRegistry.normalize(rawResource);
         Optional<FriendEntity> friend = findNearestFriend(player);
         MinecraftServer server = player.getServer();
@@ -288,7 +289,7 @@ public final class StayWithMeCommands {
 
     private static int miningExpedition(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-        String rawResource = StringArgumentType.getString(context, "resource");
+        String rawResource = commandResourceId(context, "resource");
         String normalized = MiningTargetRegistry.normalize(rawResource);
         Optional<MiningTargetRegistry.MiningTarget> miningTarget = MiningTargetRegistry.find(normalized);
         if (miningTarget.isEmpty()) {
@@ -449,7 +450,7 @@ public final class StayWithMeCommands {
 
     private static int oreInfo(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-        String rawResource = StringArgumentType.getString(context, "resource");
+        String rawResource = commandResourceId(context, "resource");
         ResourceLocation resourceId = parseItemId(rawResource);
         if (resourceId == null) {
             context.getSource().sendFailure(Component.literal("Invalid resource id: " + rawResource));
@@ -533,7 +534,7 @@ public final class StayWithMeCommands {
 
     private static int memoryLearnResource(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-        String rawResource = StringArgumentType.getString(context, "resource");
+        String rawResource = commandResourceId(context, "resource");
         String hint = StringArgumentType.getString(context, "hint");
         ResourceLocation resourceId = parseItemId(rawResource);
         if (resourceId == null) {
@@ -596,5 +597,9 @@ public final class StayWithMeCommands {
         }
         String normalized = rawItem.contains(":") ? rawItem.trim() : "minecraft:" + rawItem.trim();
         return ResourceLocation.tryParse(normalized);
+    }
+
+    private static String commandResourceId(CommandContext<CommandSourceStack> context, String argumentName) {
+        return ResourceLocationArgument.getId(context, argumentName).toString();
     }
 }
