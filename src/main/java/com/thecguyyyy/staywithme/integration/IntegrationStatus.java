@@ -41,7 +41,7 @@ public final class IntegrationStatus {
                 .append(id)
                 .append(": ")
                 .append(loaded ? "loaded" : "not loaded"));
-        builder.append("\nCurrent behavior: Forge-native MVP controller is active unless integrations.usePlayerEngineController is true and PlayerEngine is loaded.");
+        builder.append("\nCurrent behavior: Forge-native movement and targeted survival mining remain active. The optional PlayerEngine bridge is guarded until valid entity binding exists.");
         return builder.toString();
     }
 

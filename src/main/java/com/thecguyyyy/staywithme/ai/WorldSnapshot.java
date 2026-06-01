@@ -1,11 +1,11 @@
 package com.thecguyyyy.staywithme.ai;
 
 import com.thecguyyyy.staywithme.entity.FriendEntity;
+import com.thecguyyyy.staywithme.perception.FriendPerception;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.item.ItemStack;
@@ -85,7 +85,7 @@ public class WorldSnapshot {
         BlockPos min = center.offset(-radius, -4, -radius);
         BlockPos max = center.offset(radius, 6, radius);
         for (BlockPos pos : BlockPos.betweenClosed(min, max)) {
-            if (level.getBlockState(pos).is(BlockTags.LOGS)) {
+            if (FriendPerception.isExposedBreakableLog(level, pos)) {
                 count++;
             }
         }

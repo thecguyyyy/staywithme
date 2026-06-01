@@ -189,18 +189,6 @@ public class LocalBehaviorController {
     private BlockPos furnaceStationTarget;
     private LivingEntity combatTarget;
     private LongTaskWorkflow workflow;
-    private static final Block[] VANILLA_LOG_BLOCKS = new Block[]{
-            Blocks.OAK_LOG,
-            Blocks.SPRUCE_LOG,
-            Blocks.BIRCH_LOG,
-            Blocks.JUNGLE_LOG,
-            Blocks.ACACIA_LOG,
-            Blocks.DARK_OAK_LOG,
-            Blocks.MANGROVE_LOG,
-            Blocks.CHERRY_LOG,
-            Blocks.CRIMSON_STEM,
-            Blocks.WARPED_STEM
-    };
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -218,7 +206,7 @@ public class LocalBehaviorController {
         this.friend = friend;
         this.body = body;
         this.interaction = friend.getInteractionProvider();
-        this.mineAdapter = new MineActionAdapter(friend, body, this.interaction);
+        this.mineAdapter = new MineActionAdapter(body, this.interaction);
         this.placeAdapter = new PlaceActionAdapter(body, this.interaction);
         this.craftingAdapter = new CraftingActionAdapter(friend);
         this.smeltingAdapter = new SmeltingActionAdapter(friend);
@@ -2206,10 +2194,8 @@ public class LocalBehaviorController {
         MineActionAdapter.MineResult result = this.mineAdapter.mineOne(
                 serverLevel,
                 this.woodTarget,
-                stack -> stack.is(ItemTags.LOGS),
                 () -> this.findStandPositionNearBlock(serverLevel, this.woodTarget),
-                TASK_SPEED,
-                VANILLA_LOG_BLOCKS
+                TASK_SPEED
         );
         switch (result) {
             case BROKEN -> {
@@ -2222,7 +2208,7 @@ public class LocalBehaviorController {
                 this.friend.getFriendBrain().failTask("I reached the log, but I could not break it like a survival player.");
                 return false;
             }
-            case WORKING_PLAYERENGINE, WORKING_FALLBACK, FALLBACK_READY -> {
+            case WORKING_FALLBACK -> {
                 return false;
             }
         }
@@ -2294,10 +2280,8 @@ public class LocalBehaviorController {
         MineActionAdapter.MineResult result = this.mineAdapter.mineOne(
                 serverLevel,
                 this.resourceTarget,
-                inventoryMatcher,
                 () -> cachedApproachTarget.isPresent() ? cachedApproachTarget : this.findStandPositionNearBlock(serverLevel, this.resourceTarget),
-                TASK_SPEED,
-                sourceBlocks
+                TASK_SPEED
         );
         switch (result) {
             case BROKEN -> {
@@ -2310,7 +2294,7 @@ public class LocalBehaviorController {
                 if (minedCount >= step.amount()) {
                     this.rememberResourceKnowledge(
                             step.target(),
-                            "Observed success: mined " + displayName + " in " + serverLevel.dimension().location() + " using survival-style block breaking or PlayerEngine/Baritone mining.",
+                            "Observed success: mined " + displayName + " in " + serverLevel.dimension().location() + " using targeted survival-style block breaking.",
                             "observed_mining"
                     );
                     this.workflow.completeCurrent("mined " + displayName);
@@ -2322,7 +2306,7 @@ public class LocalBehaviorController {
                 this.sayThrottled("That " + displayName + " target failed. Looking for another one.");
                 return false;
             }
-            case WORKING_PLAYERENGINE, WORKING_FALLBACK, FALLBACK_READY -> {
+            case WORKING_FALLBACK -> {
                 return false;
             }
         }
@@ -4853,18 +4837,7 @@ public class LocalBehaviorController {
     }
 
     private boolean isExposedTargetBlock(ServerLevel level, BlockPos pos) {
-        if (!level.hasChunkAt(pos)) {
-            return false;
-        }
-        for (Direction direction : Direction.values()) {
-            BlockPos adjacent = pos.relative(direction);
-            BlockState adjacentState = level.getBlockState(adjacent);
-            if (adjacentState.getCollisionShape(level, adjacent).isEmpty()
-                    && adjacentState.getFluidState().isEmpty()) {
-                return true;
-            }
-        }
-        return false;
+        return FriendPerception.isExposedBlock(level, pos);
     }
 
     private boolean hasToolForAnySource(Block... sourceBlocks) {

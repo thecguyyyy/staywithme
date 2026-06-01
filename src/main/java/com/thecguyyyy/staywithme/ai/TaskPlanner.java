@@ -44,7 +44,7 @@ public class TaskPlanner {
             - MAKE_FURNACE: obtain cobblestone and craft one furnace.
             - MAKE_IRON_INGOT: obtain wood, make tools, mine cobblestone/coal/iron ore, place a furnace, and smelt one iron ingot.
             - MAKE_IRON_PICKAXE: obtain wood, make tools, mine cobblestone/coal/raw iron, smelt three iron ingots, and craft one iron pickaxe.
-            - MINE_RESOURCE: mine a known ore/resource target by item id, using PlayerEngine/Baritone when available.
+            - MINE_RESOURCE: mine a known exposed/reachable ore or resource target by item id using survival-style movement and block breaking.
             - MINING_EXPEDITION: plan and execute a cautious mining expedition with preparation, descent to a target layer, branch mining, safety interrupts, and return/resupply behavior.
             - ATTACK_NEARBY_HOSTILE: approach and attack one nearby hostile mob.
             - RETURN_TO_PLAYER: return to the player without permanently following.

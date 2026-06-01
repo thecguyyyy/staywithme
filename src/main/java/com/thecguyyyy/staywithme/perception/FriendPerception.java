@@ -2,6 +2,7 @@ package com.thecguyyyy.staywithme.perception;
 
 import com.thecguyyyy.staywithme.entity.FriendEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.LivingEntity;
@@ -56,7 +57,7 @@ public class FriendPerception {
             return Optional.empty();
         }
         this.refresh(level);
-        return this.findNearestBreakableLog(level, radius).map(ScoredBlock::pos);
+        return this.scanExposedBreakableLogs(level, radius).nearest().map(ScoredBlock::pos);
     }
 
     public Optional<LivingEntity> nearestHostile(int radius) {
@@ -79,8 +80,8 @@ public class FriendPerception {
         Optional<LivingEntity> nearestHostile = monsters.stream()
                 .min(Comparator.comparingDouble(this.friend::distanceToSqr))
                 .map(entity -> (LivingEntity) entity);
-        Optional<ScoredBlock> nearestLog = this.findNearestBreakableLog(level, BLOCK_RADIUS);
-        int logCount = this.countLogs(level, BLOCK_RADIUS);
+        LogScan logScan = this.scanExposedBreakableLogs(level, BLOCK_RADIUS);
+        Optional<ScoredBlock> nearestLog = logScan.nearest();
         int standableCount = this.countStandableBlocks(level, 6);
 
         this.snapshot = new PerceptionSnapshot(
@@ -92,7 +93,7 @@ public class FriendPerception {
                 nearestHostile.map(entity -> entity.getType().getDescription().getString()).orElse("none"),
                 nearestHostile.map(entity -> (double) this.friend.distanceTo(entity)).orElse(-1.0D),
                 droppedItems.size(),
-                logCount,
+                logScan.count(),
                 nearestLog.map(ScoredBlock::pos),
                 nearestLog.map(ScoredBlock::distance).orElse(-1.0D),
                 standableCount,
@@ -101,19 +102,21 @@ public class FriendPerception {
         this.lastRefreshGameTime = level.getGameTime();
     }
 
-    private Optional<ScoredBlock> findNearestBreakableLog(ServerLevel level, int radius) {
+    private LogScan scanExposedBreakableLogs(ServerLevel level, int radius) {
         BlockPos center = this.friend.blockPosition();
         BlockPos best = null;
         double bestDistance = Double.MAX_VALUE;
+        int count = 0;
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
         for (int y = -BLOCK_SEARCH_DOWN; y <= BLOCK_SEARCH_UP; y++) {
             for (int x = -radius; x <= radius; x++) {
                 for (int z = -radius; z <= radius; z++) {
                     cursor.set(center.getX() + x, center.getY() + y, center.getZ() + z);
-                    if (!isBreakableLog(level, cursor)) {
+                    if (!isExposedBreakableLog(level, cursor)) {
                         continue;
                     }
+                    count++;
                     double distance = center.distSqr(cursor);
                     if (distance < bestDistance) {
                         bestDistance = distance;
@@ -123,25 +126,10 @@ public class FriendPerception {
             }
         }
 
-        return best == null ? Optional.empty() : Optional.of(new ScoredBlock(best, Math.sqrt(bestDistance)));
-    }
-
-    private int countLogs(ServerLevel level, int radius) {
-        BlockPos center = this.friend.blockPosition();
-        int count = 0;
-        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
-
-        for (int y = -BLOCK_SEARCH_DOWN; y <= BLOCK_SEARCH_UP; y++) {
-            for (int x = -radius; x <= radius; x++) {
-                for (int z = -radius; z <= radius; z++) {
-                    cursor.set(center.getX() + x, center.getY() + y, center.getZ() + z);
-                    if (level.getBlockState(cursor).is(BlockTags.LOGS)) {
-                        count++;
-                    }
-                }
-            }
-        }
-        return count;
+        Optional<ScoredBlock> nearest = best == null
+                ? Optional.empty()
+                : Optional.of(new ScoredBlock(best, Math.sqrt(bestDistance)));
+        return new LogScan(nearest, count);
     }
 
     private int countStandableBlocks(ServerLevel level, int radius) {
@@ -163,10 +151,35 @@ public class FriendPerception {
     }
 
     public static boolean isBreakableLog(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
         BlockState state = level.getBlockState(pos);
         return state.is(BlockTags.LOGS)
                 && !state.hasBlockEntity()
                 && state.getDestroySpeed(level, pos) >= 0.0F;
+    }
+
+    public static boolean isExposedBreakableLog(ServerLevel level, BlockPos pos) {
+        return isBreakableLog(level, pos) && isExposedBlock(level, pos);
+    }
+
+    public static boolean isExposedBlock(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacent = pos.relative(direction);
+            if (!level.hasChunkAt(adjacent)) {
+                continue;
+            }
+            BlockState adjacentState = level.getBlockState(adjacent);
+            if (adjacentState.getCollisionShape(level, adjacent).isEmpty()
+                    && adjacentState.getFluidState().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean canStandAt(ServerLevel level, BlockPos pos) {
@@ -181,5 +194,8 @@ public class FriendPerception {
     }
 
     private record ScoredBlock(BlockPos pos, double distance) {
+    }
+
+    private record LogScan(Optional<ScoredBlock> nearest, int count) {
     }
 }

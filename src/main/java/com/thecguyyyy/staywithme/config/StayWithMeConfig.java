@@ -43,7 +43,7 @@ public final class StayWithMeConfig {
 
         builder.push("integrations");
         USE_PLAYERENGINE_CONTROLLER = builder
-                .comment("Experimental. If true and PlayerEngine is loaded, use PlayerEngine/Automatone pathing through the embodied controller adapter.")
+                .comment("Experimental guarded PlayerEngine bridge. Current movement and mining stay Forge-native until a valid player-entity runtime binding exists.")
                 .define("usePlayerEngineController", false);
         USE_SMARTBRAINLIB_BEHAVIORS = builder
                 .comment("Reserved for a later SmartBrainLib behavior-tree implementation. Current MVP still uses LocalBehaviorController.")

@@ -30,7 +30,7 @@ public class MiningExpeditionPlanner {
 
             Your job is to output a high-level, survival-safe mining expedition plan as JSON.
             You do not directly control movement, camera, block breaking, attacking, or ticks.
-            The local controller and PlayerEngine/Baritone adapters execute deterministic actions.
+            The Forge-native local controller executes deterministic survival-style actions.
 
             Output rules:
             - Output exactly one JSON object and nothing else.

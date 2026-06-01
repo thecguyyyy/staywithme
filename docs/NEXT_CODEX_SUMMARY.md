@@ -8,7 +8,7 @@
 - Java: 17
 - Main package: `com.thecguyyyy.staywithme`
 - Current build command: `.\gradlew.bat build`
-- Last verified result: build passes on 2026-05-29 after the command resource-id update.
+- Last verified result: build passes on 2026-06-01 after the targeted survival mining and exposed-log perception update.
 - Manual reload-resume checklist: `docs/RELOAD_RESUME_TESTS.md`
 
 ## Current Direction
@@ -75,6 +75,7 @@ The companion can:
 - Use a real placed furnace block entity for iron smelting.
 - Mine known resources with the Forge-native survival executor.
 - Discover nearby resources through visible/reachable world checks instead of buried-resource scans.
+- Report only loaded, exposed breakable logs through local perception and LLM world snapshots.
 - Keep survival constraints for fallback mining:
   - correct tool is required for blocks that need one
   - tool durability is consumed
@@ -132,6 +133,7 @@ Important classes:
 Current behavior:
 
 - Current movement/mining is Forge-native.
+- `MineActionAdapter` only mines a concrete exposed/reachable target after moving into survival reach. The old type-only `mineAny()` entry point has been removed.
 - PlayerEngine/Automatone/Baritone calls are guarded and disabled until the companion has a valid bound player-entity runtime.
 - If PlayerEngine is unavailable or fails, execution remains Forge-native.
 - `FriendEntity` does not directly implement external PlayerEngine interfaces, to keep runtime safe without PlayerEngine.
@@ -198,6 +200,11 @@ Current memory supports:
 
 Recent change:
 
+- `FriendPerception` and LLM `WorldSnapshot` now report only loaded, exposed breakable logs. Buried logs are no longer counted or surfaced as nearby observations.
+- Exposed-log perception now scans the 101x101 search area once per refresh for both nearest-log selection and counting, instead of traversing the same block volume twice.
+- Resource exposure checks are shared between perception and local mining. A block is considered exposed only when its own chunk is loaded and it has an empty, fluid-free adjacent position in a loaded chunk.
+- `MineActionAdapter` is now targeted-survival-only: it approaches a selected target, checks survival reach, and breaks that block locally. The unused type-only `mineAny()` PlayerEngine path and its waiting state machine were removed to prevent accidental xray-style mining from returning later.
+- Planner prompts, integration status text, config comments, and observed-mining memory notes now describe the active Forge-native targeted survival executor instead of implying active PlayerEngine/Baritone mining.
 - Resource/item command arguments now use Minecraft resource-location parsing, so namespaced IDs such as `minecraft:diamond` work in `/staywithme mine`, `/staywithme mineplan`, `/staywithme expedition`, `/staywithme craft`, `/staywithme oreinfo`, and `/staywithme memory learnresource`.
 - Survival resource discovery is visibility-limited. Local execution should not scan buried ore as if using xray; exposed target blocks are checked with reach/ray validation before mining.
 - Wood gathering searches a 101x101 horizontal area for exposed/reachable logs. If no reachable wood is found, it advances through deterministic randomized ring exploration instead of pure back-and-forth random walking.
@@ -285,6 +292,7 @@ This is still intentionally simple. Future work should deepen active expedition 
 ## Key Current Limitations
 
 - No automated visual/gameplay test coverage yet.
+- Visibility is currently an exposed-face heuristic plus reach/navigation validation, not a full BFS field-of-view model. Surface exploration and underground tunnel digging remain deterministic local executors.
 - `LocalBehaviorController` is too large.
 - Expedition descent is conservative and simple.
 - No full persistent route graph replay across restarts; branch routes are structured and latest-main-end reuse exists, but the companion does not yet traverse the whole graph.
