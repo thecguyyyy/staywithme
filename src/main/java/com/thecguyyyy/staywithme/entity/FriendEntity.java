@@ -21,6 +21,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
+import net.minecraft.world.level.pathfinder.BlockPathTypes;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.InteractionHand;
@@ -61,6 +62,9 @@ public class FriendEntity extends PathfinderMob {
         this.hungerProvider = new FriendHungerProvider();
         this.perception = new FriendPerception(this);
         this.friendBrain = new FriendBrain(this);
+        this.getNavigation().setCanFloat(true);
+        this.setPathfindingMalus(BlockPathTypes.WATER, 0.0F);
+        this.setPathfindingMalus(BlockPathTypes.WATER_BORDER, 0.0F);
         this.setPersistenceRequired();
         this.inventory.addListener(container -> this.setPersistenceRequired());
     }

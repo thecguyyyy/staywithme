@@ -33,6 +33,7 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.Container;
@@ -43,6 +44,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FallingBlock;
@@ -99,6 +101,7 @@ public class LocalBehaviorController {
     private static final int WOOD_EXPLORE_STALL_TICKS = 20 * 20;
     private static final int RESOURCE_EXPLORE_MOVE_STALL_TICKS = 20 * 20;
     private static final int RESOURCE_EXPLORE_BREADCRUMB_LIMIT = 512;
+    private static final int RESOURCE_EXPLORE_SURFACE_DESCENT_BLOCKS = 8;
     private static final int CONSTRUCTION_MOVE_STALL_TICKS = 20 * 8;
     private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
             Direction.NORTH,
@@ -138,6 +141,7 @@ public class LocalBehaviorController {
     private final ConstructionPathLlmPlanner constructionPathLlmPlanner;
     private String pendingRestoredWorkflowId;
     private int pendingRestoredWorkflowIndex = -1;
+    private int pendingRestoredWorkflowStepCount = -1;
     private String pendingRestoredTaskType;
     private String pendingRestoredTaskTarget;
     private int pendingRestoredTaskAmount = -1;
@@ -146,6 +150,7 @@ public class LocalBehaviorController {
     private int attackCooldownTicks;
     private int workMessageCooldownTicks;
     private BlockPos woodTarget;
+    private BlockPos woodLeafTarget;
     private int woodSearchCooldownTicks;
     private BlockPos woodExploreOrigin;
     private BlockPos woodExploreTarget;
@@ -162,6 +167,7 @@ public class LocalBehaviorController {
     private BlockPos resourceExploreDigTarget;
     private Direction resourceExploreDirection;
     private BlockPos resourceExploreLastStepPos;
+    private int resourceExploreTargetY;
     private int resourceExploreBaseSegmentLength;
     private int resourceExploreStepsRemaining;
     private int resourceExploreTurns;
@@ -256,6 +262,7 @@ public class LocalBehaviorController {
         this.attackCooldownTicks = 0;
         this.workMessageCooldownTicks = 0;
         this.woodTarget = null;
+        this.woodLeafTarget = null;
         this.woodSearchCooldownTicks = 0;
         this.resetWoodExploreTarget();
         this.resourceTarget = null;
@@ -387,6 +394,7 @@ public class LocalBehaviorController {
 
     public void stopTransientTargets() {
         this.woodTarget = null;
+        this.woodLeafTarget = null;
         this.woodSearchCooldownTicks = 0;
         this.resetWoodExploreTarget();
         this.resourceTarget = null;
@@ -486,6 +494,9 @@ public class LocalBehaviorController {
         }
         this.pendingRestoredWorkflowId = workflowTag.getString("Id");
         this.pendingRestoredWorkflowIndex = workflowTag.getInt("CurrentIndex");
+        this.pendingRestoredWorkflowStepCount = workflowTag.contains("StepCount", Tag.TAG_INT)
+                ? workflowTag.getInt("StepCount")
+                : -1;
         if (tag.contains("Task", Tag.TAG_COMPOUND)) {
             CompoundTag taskTag = tag.getCompound("Task");
             this.pendingRestoredTaskType = taskTag.contains("Type", Tag.TAG_STRING) ? taskTag.getString("Type") : null;
@@ -1243,6 +1254,8 @@ public class LocalBehaviorController {
         }
         if (this.workflow != null
                 && this.pendingRestoredWorkflowId.equals(this.workflow.id())
+                && (this.pendingRestoredWorkflowStepCount < 0
+                || this.pendingRestoredWorkflowStepCount == this.workflow.stepCount())
                 && this.pendingControllerTaskMatches(task)) {
             this.workflow.restoreCurrentIndex(this.pendingRestoredWorkflowIndex);
         }
@@ -1431,6 +1444,7 @@ public class LocalBehaviorController {
     private void clearPendingControllerState() {
         this.pendingRestoredWorkflowId = null;
         this.pendingRestoredWorkflowIndex = -1;
+        this.pendingRestoredWorkflowStepCount = -1;
         this.pendingRestoredTaskType = null;
         this.pendingRestoredTaskTarget = null;
         this.pendingRestoredTaskAmount = -1;
@@ -1622,6 +1636,9 @@ public class LocalBehaviorController {
         if (miningTarget.isPresent()) {
             MiningTargetRegistry.MiningTarget target = miningTarget.get();
             if (!this.hasToolForAnySource(target.sourceBlocks())) {
+                if (this.scheduleToolRecovery(target.toolRequirement(), target.displayName())) {
+                    return true;
+                }
                 step.running("missing tool for " + target.displayName());
                 this.sayThrottled("I need " + target.requiredToolHint() + " before mining " + target.displayName() + ".");
                 return false;
@@ -2279,8 +2296,12 @@ public class LocalBehaviorController {
                 this.woodSearchCooldownTicks = WOOD_SEARCH_INTERVAL_TICKS;
             }
             if (this.woodTarget == null) {
+                if (this.clearLeafBlockingObservedLog(serverLevel)) {
+                    return false;
+                }
                 return this.exploreForWood(serverLevel);
             }
+            this.woodLeafTarget = null;
             this.resetWoodExploreTarget();
             this.say("I found a log at " + this.formatPos(this.woodTarget) + ".");
         }
@@ -2300,6 +2321,7 @@ public class LocalBehaviorController {
             case BROKEN -> {
                 this.say("Collected wood. Inventory: " + this.friend.getInventorySummary());
                 this.woodTarget = null;
+                this.woodLeafTarget = null;
                 this.woodSearchCooldownTicks = 0;
                 this.resetWoodExploreTarget();
                 return true;
@@ -2314,6 +2336,42 @@ public class LocalBehaviorController {
         }
 
         return false;
+    }
+
+    private boolean clearLeafBlockingObservedLog(ServerLevel level) {
+        if (this.woodLeafTarget == null
+                || !this.isBreakableLeaf(level, this.woodLeafTarget)
+                || !this.isReachableMiningTarget(level, this.woodLeafTarget)) {
+            this.woodLeafTarget = this.findNearestReachableLeafBlockingObservedLog(level, WOOD_SEARCH_RADIUS).orElse(null);
+        }
+        if (this.woodLeafTarget == null) {
+            return false;
+        }
+
+        if (!this.interaction.canReachBlock(this.woodLeafTarget)) {
+            this.sayThrottled("Moving closer to leaves that block an observed log at "
+                    + this.formatPos(this.woodLeafTarget)
+                    + ".");
+        }
+        MineActionAdapter.MineResult result = this.mineAdapter.mineOne(
+                level,
+                this.woodLeafTarget,
+                () -> this.findStandPositionNearBlock(level, this.woodLeafTarget),
+                TASK_SPEED
+        );
+        switch (result) {
+            case BROKEN -> {
+                this.say("I cleared leaves blocking the tree.");
+                this.woodLeafTarget = null;
+                this.woodSearchCooldownTicks = 0;
+            }
+            case FAILED -> {
+                this.woodLeafTarget = null;
+            }
+            case WORKING_FALLBACK -> {
+            }
+        }
+        return true;
     }
 
     private boolean executeAcquireMineableResourceStep(
@@ -2424,6 +2482,25 @@ public class LocalBehaviorController {
         return false;
     }
 
+    private boolean scheduleToolRecovery(
+            MiningTargetRegistry.ToolRequirement requirement,
+            String blockedResourceName
+    ) {
+        if (this.workflow == null || requirement == null || requirement == MiningTargetRegistry.ToolRequirement.NONE) {
+            return false;
+        }
+        List<WorkStep> recoverySteps = WorkflowFactory.toolRecovery(requirement);
+        if (!this.workflow.insertBeforeCurrent(recoverySteps)) {
+            return false;
+        }
+        this.finishResourceExplore();
+        this.body.stop();
+        this.say("My mining tool is no longer usable. I am preparing a replacement before continuing "
+                + blockedResourceName
+                + ".");
+        return true;
+    }
+
     private boolean exploreForMineableResource(
             ServerLevel level,
             WorkStep step,
@@ -2449,16 +2526,26 @@ public class LocalBehaviorController {
             return false;
         }
 
-        this.ensureResourceExploreState(step.target(), profile);
+        this.ensureResourceExploreState(level, step.target(), profile);
         this.updateResourceExploreTraversalProgress();
         BlockPos current = this.friend.blockPosition();
+        if (this.isFluidDisplaced(level, current)) {
+            step.running("recovering from fluid displacement");
+            this.sayThrottled("Water displaced me from the mining route, so I am backtracking to a dry passage.");
+            if (this.moveBackAlongResourceExplorePath(step, "dry mining passage")) {
+                return false;
+            }
+            this.rotateResourceExploreDirection();
+            return false;
+        }
+        this.lowerResourceExploreAnchorIfStillSurface(level, current);
         Direction direction = this.resourceExploreDirection();
         BlockPos nextFeet;
         String label;
-        if (current.getY() > profile.preferredYMax()) {
+        if (current.getY() > this.resourceExploreTargetY) {
             nextFeet = current.relative(direction).below();
             label = "resource exploration staircase down";
-        } else if (current.getY() < profile.preferredYMin()) {
+        } else if (current.getY() < this.resourceExploreTargetY) {
             nextFeet = current.relative(direction).above();
             label = "resource exploration staircase up";
         } else {
@@ -2467,25 +2554,42 @@ public class LocalBehaviorController {
         }
 
         if (!this.canUsePassageFoot(level, nextFeet)) {
+            if (this.tryRepairPassageFloor(level, step, nextFeet, label)) {
+                return false;
+            }
             this.rotateResourceExploreDirection();
             step.running("finding safe resource exploration direction");
-            this.sayThrottled("I do not see exposed reachable "
-                    + target.displayName()
+            this.sayThrottled("I do not see exposed safely mineable "
+                    + this.resourceExplorationSourceName(target)
                     + ", so I am rotating toward a safer exploration route.");
             return false;
         }
 
         step.running("digging " + label);
-        this.sayThrottled("I do not see exposed reachable "
-                + target.displayName()
+        this.sayThrottled("I do not see exposed safely mineable "
+                + this.resourceExplorationSourceName(target)
                 + ", so I am digging a survival "
                 + (label.contains("staircase") ? "staircase" : "traversal tunnel")
-                + " toward Y "
+                + " from Y "
+                + current.getY()
+                + " toward "
+                + direction.getName()
+                + " (preferred Y "
                 + profile.preferredYMin()
                 + ".."
                 + profile.preferredYMax()
-                + ".");
+                + ", tunnel anchor Y "
+                + this.resourceExploreTargetY
+                + ", segment remaining "
+                + this.resourceExploreStepsRemaining
+                + ").");
         return this.moveOrDigResourceExplorePassage(level, step, nextFeet, label);
+    }
+
+    private String resourceExplorationSourceName(MiningTargetRegistry.MiningTarget target) {
+        return WorkflowFactory.COBBLESTONE.equals(target.resourceId())
+                ? "stone or cobblestone"
+                : target.displayName();
     }
 
     private boolean moveOrDigResourceExplorePassage(
@@ -2523,6 +2627,7 @@ public class LocalBehaviorController {
                 || !state.getFluidState().isEmpty()
                 || this.hasNearbyFluidHazard(level, digTarget)
                 || this.hasNearbyFluidLeak(level, digTarget)
+                || this.hasFallingBlockCollapseRisk(level, digTarget)
                 || this.isRiskyExpeditionPassageBlock(state)) {
             this.rotateResourceExploreDirection();
             step.running("avoiding unsafe block in " + label);
@@ -2572,6 +2677,7 @@ public class LocalBehaviorController {
     }
 
     private void ensureResourceExploreState(
+            ServerLevel level,
             String targetKind,
             MiningTargetRegistry.ExplorationProfile profile
     ) {
@@ -2581,10 +2687,45 @@ public class LocalBehaviorController {
         this.resetResourceExplore();
         this.resourceExploreKind = targetKind;
         this.resourceExploreDirection = HORIZONTAL_EXPEDITION_DIRECTIONS[this.friend.getRandom().nextInt(HORIZONTAL_EXPEDITION_DIRECTIONS.length)];
+        this.resourceExploreTargetY = this.chooseResourceExploreTargetY(level, profile);
         this.resourceExploreBaseSegmentLength = Math.max(3, profile.traversalSegmentLength());
         this.resourceExploreStepsRemaining = this.resourceExploreBaseSegmentLength;
         this.resourceExploreLastStepPos = this.friend.blockPosition().immutable();
         this.rememberResourceExploreBreadcrumb(this.resourceExploreLastStepPos);
+    }
+
+    private int chooseResourceExploreTargetY(
+            ServerLevel level,
+            MiningTargetRegistry.ExplorationProfile profile
+    ) {
+        BlockPos current = this.friend.blockPosition();
+        if (current.getY() > profile.preferredYMax()) {
+            return profile.preferredYMax();
+        }
+        if (current.getY() < profile.preferredYMin()) {
+            return profile.preferredYMin();
+        }
+        if (this.isSurfaceExposedResourceExplorePosition(level, current)) {
+            return this.lowerResourceExploreAnchor(level, current.getY());
+        }
+        return current.getY();
+    }
+
+    private void lowerResourceExploreAnchorIfStillSurface(ServerLevel level, BlockPos current) {
+        if (current.getY() != this.resourceExploreTargetY
+                || !this.isSurfaceExposedResourceExplorePosition(level, current)) {
+            return;
+        }
+        this.resourceExploreTargetY = this.lowerResourceExploreAnchor(level, current.getY());
+    }
+
+    private int lowerResourceExploreAnchor(ServerLevel level, int currentY) {
+        return Math.max(level.getMinBuildHeight() + 2, currentY - RESOURCE_EXPLORE_SURFACE_DESCENT_BLOCKS);
+    }
+
+    private boolean isSurfaceExposedResourceExplorePosition(ServerLevel level, BlockPos pos) {
+        int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, pos.getX(), pos.getZ());
+        return pos.getY() >= surfaceY - 1 || level.canSeeSky(pos.above());
     }
 
     private void updateResourceExploreTraversalProgress() {
@@ -2600,7 +2741,7 @@ public class LocalBehaviorController {
         this.rememberResourceExploreBreadcrumb(current);
         this.resourceExploreStepsRemaining--;
         if (this.resourceExploreStepsRemaining <= 0) {
-            this.rotateResourceExploreDirection();
+            this.advanceResourceExploreTraversalDirection();
         }
     }
 
@@ -2613,10 +2754,23 @@ public class LocalBehaviorController {
     }
 
     private void rotateResourceExploreDirection() {
+        this.rotateResourceExploreDirection(false);
+    }
+
+    private void advanceResourceExploreTraversalDirection() {
+        this.rotateResourceExploreDirection(true);
+    }
+
+    private void rotateResourceExploreDirection(boolean expandTraversal) {
         Direction base = this.resourceExploreDirection();
         this.resourceExploreDirection = base.getClockWise();
-        this.resourceExploreTurns++;
-        this.resourceExploreStepsRemaining = this.resourceExploreBaseSegmentLength + (this.resourceExploreTurns / 2) * 2;
+        if (expandTraversal) {
+            this.resourceExploreTurns++;
+        }
+        int traversalLength = this.resourceExploreBaseSegmentLength + (this.resourceExploreTurns / 2) * 2;
+        this.resourceExploreStepsRemaining = expandTraversal
+                ? traversalLength
+                : Math.max(1, Math.min(this.resourceExploreStepsRemaining, traversalLength));
         this.resourceExploreDigTarget = null;
         this.resetResourceExploreMoveWatch();
         this.interaction.cancelBreakBlock();
@@ -2663,6 +2817,7 @@ public class LocalBehaviorController {
         this.resourceExploreDigTarget = null;
         this.resourceExploreDirection = null;
         this.resourceExploreLastStepPos = null;
+        this.resourceExploreTargetY = 0;
         this.resourceExploreBaseSegmentLength = 0;
         this.resourceExploreStepsRemaining = 0;
         this.resourceExploreTurns = 0;
@@ -5378,6 +5533,13 @@ public class LocalBehaviorController {
             this.rememberExpeditionHazardAvoided("fluid", target, "fluid leak near " + label);
             return false;
         }
+        if (this.hasFallingBlockCollapseRisk(level, target)) {
+            this.rotatePassageDirection(label);
+            step.running("avoiding collapse risk near " + label);
+            this.rememberExpeditionHazardAvoided("collapse", target, "falling block above "
+                    + this.formatPos(target));
+            return false;
+        }
         if (this.isRiskyExpeditionPassageBlock(state)) {
             this.rotatePassageDirection(label);
             step.running("avoiding risky block in " + label);
@@ -5509,18 +5671,26 @@ public class LocalBehaviorController {
     }
 
     private Optional<BlockPos> firstBlockingPassageBlock(ServerLevel level, BlockPos nextFeet) {
+        if (nextFeet.getY() < this.friend.blockPosition().getY()) {
+            BlockPos descendingTransitionHead = nextFeet.above(2);
+            if (!this.isPassageSpaceClear(level, descendingTransitionHead)) {
+                return Optional.of(descendingTransitionHead.immutable());
+            }
+            BlockPos head = nextFeet.above();
+            if (!this.isPassageSpaceClear(level, head)) {
+                return Optional.of(head.immutable());
+            }
+            if (!this.isPassageSpaceClear(level, nextFeet)) {
+                return Optional.of(nextFeet.immutable());
+            }
+            return Optional.empty();
+        }
         if (!this.isPassageSpaceClear(level, nextFeet)) {
             return Optional.of(nextFeet.immutable());
         }
         BlockPos head = nextFeet.above();
         if (!this.isPassageSpaceClear(level, head)) {
             return Optional.of(head.immutable());
-        }
-        if (nextFeet.getY() < this.friend.blockPosition().getY()) {
-            BlockPos descendingTransitionHead = nextFeet.above(2);
-            if (!this.isPassageSpaceClear(level, descendingTransitionHead)) {
-                return Optional.of(descendingTransitionHead.immutable());
-            }
         }
         return Optional.empty();
     }
@@ -5571,6 +5741,23 @@ public class LocalBehaviorController {
     private boolean isVanillaInfestedBlock(Block block) {
         ResourceLocation key = BuiltInRegistries.BLOCK.getKey(block);
         return "minecraft".equals(key.getNamespace()) && key.getPath().startsWith("infested_");
+    }
+
+    private boolean hasFallingBlockCollapseRisk(ServerLevel level, BlockPos minedPos) {
+        if (minedPos == null || !level.hasChunkAt(minedPos)) {
+            return true;
+        }
+        BlockPos above = minedPos.above();
+        if (!level.hasChunkAt(above)) {
+            return true;
+        }
+        return level.getBlockState(above).getBlock() instanceof FallingBlock;
+    }
+
+    private boolean isFluidDisplaced(ServerLevel level, BlockPos feetPos) {
+        return feetPos != null
+                && (!level.getFluidState(feetPos).isEmpty()
+                || !level.getFluidState(feetPos.above()).isEmpty());
     }
 
     private boolean hasImmediateLavaHazard(ServerLevel level, BlockPos feetPos) {
@@ -5651,6 +5838,8 @@ public class LocalBehaviorController {
         return this.findNearestReachableBlock(level, radius, radius, radius,
                 pos -> this.isMineableSource(level, pos, sourceBlocks)
                         && this.isExposedTargetBlock(level, pos)
+                        && this.isSafeTargetedResourceBreak(level, pos)
+                        && !this.isProtectedResourceExploreStructure(pos)
                         && !this.isRejectedResourceTarget(pos));
     }
 
@@ -5697,6 +5886,33 @@ public class LocalBehaviorController {
         return this.findNearestReachableBlock(level, radius, WOOD_SEARCH_DOWN, WOOD_SEARCH_UP,
                 pos -> isBreakableLog(level, pos)
                         && this.isExposedTargetBlock(level, pos));
+    }
+
+    private Optional<BlockPos> findNearestReachableLeafBlockingObservedLog(ServerLevel level, int radius) {
+        return this.findNearestReachableBlock(level, radius, WOOD_SEARCH_DOWN, WOOD_SEARCH_UP,
+                pos -> this.isBreakableLeaf(level, pos)
+                        && this.isExposedTargetBlock(level, pos)
+                        && this.hasAdjacentExposedBreakableLog(level, pos));
+    }
+
+    private boolean isBreakableLeaf(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
+        BlockState state = level.getBlockState(pos);
+        return state.is(BlockTags.LEAVES)
+                && !state.hasBlockEntity()
+                && state.getDestroySpeed(level, pos) >= 0.0F;
+    }
+
+    private boolean hasAdjacentExposedBreakableLog(ServerLevel level, BlockPos pos) {
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacent = pos.relative(direction);
+            if (isBreakableLog(level, adjacent) && this.isExposedTargetBlock(level, adjacent)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Optional<BlockPos> findNearestReachableBlock(
@@ -5771,7 +5987,38 @@ public class LocalBehaviorController {
     private boolean isVisibleMineableSource(ServerLevel level, BlockPos pos, Block... sourceBlocks) {
         return this.isMineableSource(level, pos, sourceBlocks)
                 && this.isExposedTargetBlock(level, pos)
+                && this.isSafeTargetedResourceBreak(level, pos)
+                && !this.isProtectedResourceExploreStructure(pos)
                 && this.isReachableMiningTarget(level, pos);
+    }
+
+    private boolean isSafeTargetedResourceBreak(ServerLevel level, BlockPos pos) {
+        if (pos == null || !level.hasChunkAt(pos)) {
+            return false;
+        }
+        BlockState state = level.getBlockState(pos);
+        return !state.hasBlockEntity()
+                && state.getDestroySpeed(level, pos) >= 0.0F
+                && state.getFluidState().isEmpty()
+                && !this.hasNearbyFluidHazard(level, pos)
+                && !this.hasNearbyFluidLeak(level, pos)
+                && !this.hasFallingBlockCollapseRisk(level, pos)
+                && !this.isRiskyExpeditionPassageBlock(state);
+    }
+
+    private boolean isProtectedResourceExploreStructure(BlockPos pos) {
+        if (pos == null) {
+            return false;
+        }
+        if (pos.equals(this.friend.blockPosition().below())) {
+            return true;
+        }
+        for (BlockPos breadcrumb : this.resourceExploreBreadcrumbs) {
+            if (pos.equals(breadcrumb.below())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isReachableMiningTarget(ServerLevel level, BlockPos pos) {
@@ -5891,6 +6138,8 @@ public class LocalBehaviorController {
                 + (this.resourceExploreDirection == null ? "none" : this.resourceExploreDirection.getName())
                 + ",dig="
                 + this.formatPos(this.resourceExploreDigTarget)
+                + ",targetY="
+                + this.resourceExploreTargetY
                 + ",segmentRemaining="
                 + this.resourceExploreStepsRemaining
                 + ",turns="
@@ -6232,23 +6481,30 @@ public class LocalBehaviorController {
             this.woodExploreRotation = this.friend.getRandom().nextInt(4);
         }
 
-        BlockPos best = null;
-        double bestDistance = Double.MAX_VALUE;
         for (int attempt = 0; attempt < WOOD_EXPLORE_ATTEMPTS_PER_TICK; attempt++) {
             BlockPos offset = this.nextWoodExploreOffset();
             int x = this.woodExploreOrigin.getX() + offset.getX();
             int z = this.woodExploreOrigin.getZ() + offset.getZ();
             Optional<BlockPos> stand = this.findWoodExploreStandPosition(level, x, z);
-            if (stand.isEmpty()) {
-                continue;
-            }
-            double distance = this.friend.blockPosition().distSqr(stand.get());
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                best = stand.get().immutable();
+            if (stand.isPresent()) {
+                return stand;
             }
         }
-        return Optional.ofNullable(best);
+
+        // Keep the traversal local when terrain or unloaded chunks invalidate a spiral segment.
+        // Otherwise the cursor keeps advancing into increasingly distant rings and never recovers.
+        this.woodExploreOrigin = this.friend.blockPosition().immutable();
+        this.woodExploreCursor = 0;
+        for (int attempt = 0; attempt < WOOD_EXPLORE_ATTEMPTS_PER_TICK; attempt++) {
+            BlockPos offset = this.nextWoodExploreOffset();
+            int x = this.woodExploreOrigin.getX() + offset.getX();
+            int z = this.woodExploreOrigin.getZ() + offset.getZ();
+            Optional<BlockPos> stand = this.findWoodExploreStandPosition(level, x, z);
+            if (stand.isPresent()) {
+                return stand;
+            }
+        }
+        return Optional.empty();
     }
 
     private BlockPos nextWoodExploreOffset() {
@@ -6295,12 +6551,28 @@ public class LocalBehaviorController {
         int baseY = this.woodExploreOrigin == null ? this.friend.blockPosition().getY() : this.woodExploreOrigin.getY();
         for (int yOffset = WOOD_EXPLORE_VERTICAL_UP; yOffset >= -WOOD_EXPLORE_VERTICAL_DOWN; yOffset--) {
             BlockPos candidate = new BlockPos(x, baseY + yOffset, z);
-            if (!level.hasChunkAt(candidate) || !this.canStandAt(level, candidate) || !this.canNavigateToStandPosition(candidate)) {
+            if (!level.hasChunkAt(candidate)
+                    || !this.canUseWoodExploreWaypoint(level, candidate)
+                    || !this.canNavigateToStandPosition(candidate)) {
                 continue;
             }
             return Optional.of(candidate.immutable());
         }
         return Optional.empty();
+    }
+
+    private boolean canUseWoodExploreWaypoint(ServerLevel level, BlockPos pos) {
+        if (this.canStandAt(level, pos)) {
+            return true;
+        }
+        if (!level.hasChunkAt(pos.above())) {
+            return false;
+        }
+        BlockState feet = level.getBlockState(pos);
+        BlockState head = level.getBlockState(pos.above());
+        return feet.getFluidState().is(FluidTags.WATER)
+                && head.getCollisionShape(level, pos.above()).isEmpty()
+                && head.getFluidState().isEmpty();
     }
 
     private boolean isWoodExploreMovementStalled() {

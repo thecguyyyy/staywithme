@@ -1,5 +1,7 @@
 package com.thecguyyyy.staywithme.ai.workflow;
 
+import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
+
 import java.util.List;
 
 public final class WorkflowFactory {
@@ -251,6 +253,46 @@ public final class WorkflowFactory {
                 new WorkStep(WorkStepType.DESCEND_TO_LAYER, layerTarget, 1),
                 new WorkStep(WorkStepType.BRANCH_MINE_RESOURCE, target, Math.max(1, amount))
         ));
+    }
+
+    public static List<WorkStep> toolRecovery(MiningTargetRegistry.ToolRequirement requirement) {
+        return switch (requirement) {
+            case NONE -> List.of();
+            case WOODEN_PICKAXE -> List.of(
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, LOGS, 3),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, PLANKS, 12),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, CRAFTING_TABLE, 1),
+                    new WorkStep(WorkStepType.PLACE_BLOCK, CRAFTING_TABLE, 1),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, STICKS, 2),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, WOODEN_PICKAXE, 1)
+            );
+            case STONE_PICKAXE -> List.of(
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, LOGS, 3),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, PLANKS, 12),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, CRAFTING_TABLE, 1),
+                    new WorkStep(WorkStepType.PLACE_BLOCK, CRAFTING_TABLE, 1),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, STICKS, 4),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, WOODEN_PICKAXE, 1),
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, COBBLESTONE, 3),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, STONE_PICKAXE, 1)
+            );
+            case IRON_PICKAXE -> List.of(
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, LOGS, 3),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, PLANKS, 12),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, CRAFTING_TABLE, 1),
+                    new WorkStep(WorkStepType.PLACE_BLOCK, CRAFTING_TABLE, 1),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, STICKS, 6),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, WOODEN_PICKAXE, 1),
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, COBBLESTONE, 11),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, STONE_PICKAXE, 1),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, FURNACE, 1),
+                    new WorkStep(WorkStepType.PLACE_BLOCK, FURNACE, 1),
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, COAL, 1),
+                    new WorkStep(WorkStepType.ACQUIRE_ITEM, RAW_IRON, 3),
+                    new WorkStep(WorkStepType.SMELT_ITEM, IRON_INGOT, 3),
+                    new WorkStep(WorkStepType.CRAFT_ITEM, IRON_PICKAXE, 1)
+            );
+        };
     }
 
     private static String workflowSafeTarget(String target) {

@@ -78,6 +78,15 @@ public class LongTaskWorkflow {
         return List.copyOf(this.steps.subList(this.currentIndex, this.steps.size()));
     }
 
+    public boolean insertBeforeCurrent(List<WorkStep> insertedSteps) {
+        this.advancePastCompletedSteps();
+        if (insertedSteps == null || insertedSteps.isEmpty() || this.currentIndex >= this.steps.size()) {
+            return false;
+        }
+        this.steps.addAll(this.currentIndex, new ArrayList<>(insertedSteps));
+        return true;
+    }
+
     public String summary() {
         Optional<WorkStep> current = this.currentStep();
         if (current.isEmpty()) {

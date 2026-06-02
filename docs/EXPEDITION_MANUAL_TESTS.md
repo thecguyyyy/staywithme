@@ -59,37 +59,42 @@ Use these checks before treating the vanilla mining expedition path as ready for
    - Place water adjacent to a block the branch tunnel would dig.
    - Expect `fluid` hazard avoidance and route rotation instead of opening a flooded tunnel.
 
-3. Floor gap repair:
+3. Falling-block collapse avoidance:
+   - Place gravel or sand directly above a stone block that the staircase or branch tunnel would otherwise dig.
+   - Expect route rotation before the supporting stone is broken.
+   - Repeat near water and confirm the companion does not open a collapse path that floods or lifts it out of the tunnel.
+
+4. Floor gap repair:
    - Create a one-block floor gap with sturdy support below.
    - Give expendable cobblestone, cobbled deepslate, dirt, or netherrack.
    - Expect floor repair before route rotation.
 
-4. Remembered route replay:
+5. Remembered route replay:
    - Complete one expedition, then run the same resource again.
    - Expect route reuse when endpoints are loaded and standable.
    - Block a remembered endpoint or waypoint and verify route invalidation/reselection.
 
-5. Movement stall guard:
+6. Movement stall guard:
    - Temporarily trap the companion during return or remembered-route travel.
    - After about 45 seconds without block-position progress, expect `moveWatch` to reach the limit and the expedition to pause/fallback instead of waiting forever.
 
-6. Local vertical passage:
+7. Local vertical passage:
    - Let descent open a staircase through solid stone and inspect a downward corner.
    - Expect enough forward head-space to be cleared before the companion enters the lower step.
    - Let ascent reuse or open an upward staircase.
    - Expect the companion to jump onto each prepared one-block rise instead of waiting on global navigation.
 
-7. Floor repair continuation:
+8. Floor repair continuation:
    - Create a supported one-block floor gap in the next branch-tunnel cell and provide an expendable repair block.
    - Expect the companion to approach from a neighboring stand position, place the floor, and continue through the repaired cell.
    - Remove all safe neighboring stand positions and expect route rotation instead of repeated walking toward the placement cell.
 
-8. Safe mining footing:
+9. Safe mining footing:
    - Run `/staywithme stonepickaxe` near exposed floor stone and watch the cobblestone collection phase.
    - Expect the companion to mine from a neighboring stand position rather than standing on the target stone and dropping into its own hole.
    - If a crafting-table return has no ordinary stand path, expect bounded construction-route recovery instead of repeated `Moving to the crafting table` messages.
 
-9. Station construction-route recovery:
+10. Station construction-route recovery:
    - Put the companion in a shallow hole or behind a short diggable obstruction while its workflow needs an existing crafting table or furnace.
    - Expect `/staywithme status` to show `construction=...` while the companion plans and executes adjacent route steps.
    - With LLM disabled or no API key configured, expect `source=local_voxel_astar`.
