@@ -28,8 +28,11 @@ public class PlaceActionAdapter {
             double speed
     ) {
         if (!this.interaction.canReachBlock(target)) {
-            BlockPos approach = approachTarget.get().orElse(target);
-            this.body.moveTo(approach, speed);
+            Optional<BlockPos> approach = approachTarget.get();
+            if (approach.isEmpty()) {
+                return PlaceResult.FAILED;
+            }
+            this.body.moveTo(approach.get(), speed);
             return PlaceResult.WORKING;
         }
 

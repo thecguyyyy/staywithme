@@ -10,8 +10,12 @@ import com.thecguyyyy.staywithme.ai.workflow.WorkStep;
 import com.thecguyyyy.staywithme.ai.workflow.WorkStepType;
 import com.thecguyyyy.staywithme.ai.workflow.WorkflowFactory;
 import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
+import com.thecguyyyy.staywithme.ai.navigation.ConstructionPathSnapshot;
+import com.thecguyyyy.staywithme.ai.navigation.ConstructionRoutePlan;
+import com.thecguyyyy.staywithme.ai.navigation.LocalConstructionPathfinder;
 import com.thecguyyyy.staywithme.crafting.VanillaCraftingPlanner;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
+import com.thecguyyyy.staywithme.llm.ConstructionPathLlmPlanner;
 import com.thecguyyyy.staywithme.llm.MiningExpeditionPlan;
 import com.thecguyyyy.staywithme.memory.ExpeditionMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
@@ -47,11 +51,13 @@ import net.minecraft.world.level.pathfinder.Path;
 
 import java.util.Optional;
 import java.util.Objects;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
@@ -64,6 +70,10 @@ public class LocalBehaviorController {
     private static final int WOOD_SEARCH_RADIUS = 50;
     private static final int WOOD_SEARCH_DOWN = 8;
     private static final int WOOD_SEARCH_UP = 16;
+    private static final int WOOD_SEARCH_INTERVAL_TICKS = 10;
+    private static final int RESOURCE_SEARCH_INTERVAL_TICKS = 10;
+    private static final int RESOURCE_TARGET_REJECT_TICKS = 20 * 15;
+    private static final int RESOURCE_TARGET_APPROACH_STALL_TICKS = 20 * 8;
     private static final int WORKFLOW_TIMEOUT_TICKS = 20 * 600;
     private static final int BRANCH_MAIN_SEGMENT_LENGTH = 12;
     private static final int BRANCH_SIDE_LENGTH = 5;
@@ -80,12 +90,16 @@ public class LocalBehaviorController {
     private static final double EXPEDITION_HAZARD_ROUTE_AVOIDANCE_RADIUS = 6.0D;
     private static final double EXPEDITION_RESOURCE_HIT_ROUTE_RADIUS = 24.0D;
     private static final double EXPEDITION_RESOURCE_DIRECTION_SCORE_MARGIN = 4.0D;
+    private static final int EXPEDITION_RESOURCE_HIT_SCORE_AMOUNT_CAP = 16;
     private static final int EXPEDITION_KNOWN_HAZARD_CACHE_SIZE = 24;
     private static final int WOOD_EXPLORE_STEP = 28;
     private static final int WOOD_EXPLORE_ATTEMPTS_PER_TICK = 64;
     private static final int WOOD_EXPLORE_VERTICAL_DOWN = 16;
     private static final int WOOD_EXPLORE_VERTICAL_UP = 16;
     private static final int WOOD_EXPLORE_STALL_TICKS = 20 * 20;
+    private static final int RESOURCE_EXPLORE_MOVE_STALL_TICKS = 20 * 20;
+    private static final int RESOURCE_EXPLORE_BREADCRUMB_LIMIT = 512;
+    private static final int CONSTRUCTION_MOVE_STALL_TICKS = 20 * 8;
     private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
             Direction.NORTH,
             Direction.EAST,
@@ -121,6 +135,7 @@ public class LocalBehaviorController {
     private final PlaceActionAdapter placeAdapter;
     private final CraftingActionAdapter craftingAdapter;
     private final SmeltingActionAdapter smeltingAdapter;
+    private final ConstructionPathLlmPlanner constructionPathLlmPlanner;
     private String pendingRestoredWorkflowId;
     private int pendingRestoredWorkflowIndex = -1;
     private String pendingRestoredTaskType;
@@ -131,6 +146,7 @@ public class LocalBehaviorController {
     private int attackCooldownTicks;
     private int workMessageCooldownTicks;
     private BlockPos woodTarget;
+    private int woodSearchCooldownTicks;
     private BlockPos woodExploreOrigin;
     private BlockPos woodExploreTarget;
     private BlockPos woodExploreLastPos;
@@ -139,6 +155,20 @@ public class LocalBehaviorController {
     private int woodExploreRotation;
     private BlockPos resourceTarget;
     private String resourceTargetKind;
+    private int resourceSearchCooldownTicks;
+    private BlockPos resourceRejectedTarget;
+    private int resourceRejectedTargetTicks;
+    private String resourceExploreKind;
+    private BlockPos resourceExploreDigTarget;
+    private Direction resourceExploreDirection;
+    private BlockPos resourceExploreLastStepPos;
+    private int resourceExploreBaseSegmentLength;
+    private int resourceExploreStepsRemaining;
+    private int resourceExploreTurns;
+    private BlockPos resourceExploreMoveWatchTarget;
+    private BlockPos resourceExploreMoveWatchLastPos;
+    private int resourceExploreMoveWatchTicks;
+    private List<BlockPos> resourceExploreBreadcrumbs = new ArrayList<>();
     private BlockPos expeditionDigTarget;
     private Direction expeditionDirection;
     private BlockPos expeditionSupplyPoint;
@@ -187,6 +217,14 @@ public class LocalBehaviorController {
     private BlockPos placeTarget;
     private BlockPos craftingStationTarget;
     private BlockPos furnaceStationTarget;
+    private CompletableFuture<Optional<ConstructionRoutePlan>> constructionPathFuture;
+    private ConstructionRoutePlan constructionPathPlan;
+    private BlockPos constructionPathOrigin;
+    private BlockPos constructionPathTarget;
+    private BlockPos constructionPathLastMovePos;
+    private String constructionPathLabel = "none";
+    private int constructionPathStepIndex;
+    private int constructionPathMoveStallTicks;
     private LivingEntity combatTarget;
     private LongTaskWorkflow workflow;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
@@ -210,6 +248,7 @@ public class LocalBehaviorController {
         this.placeAdapter = new PlaceActionAdapter(body, this.interaction);
         this.craftingAdapter = new CraftingActionAdapter(friend);
         this.smeltingAdapter = new SmeltingActionAdapter(friend);
+        this.constructionPathLlmPlanner = new ConstructionPathLlmPlanner();
     }
 
     public void onTaskStarted(FriendTask task) {
@@ -217,9 +256,14 @@ public class LocalBehaviorController {
         this.attackCooldownTicks = 0;
         this.workMessageCooldownTicks = 0;
         this.woodTarget = null;
+        this.woodSearchCooldownTicks = 0;
         this.resetWoodExploreTarget();
         this.resourceTarget = null;
         this.resourceTargetKind = null;
+        this.resourceSearchCooldownTicks = 0;
+        this.resourceRejectedTarget = null;
+        this.resourceRejectedTargetTicks = 0;
+        this.resetResourceExplore();
         this.expeditionDigTarget = null;
         this.expeditionDirection = null;
         this.expeditionSupplyPoint = task.type() == FriendTaskType.MINING_EXPEDITION ? this.friend.blockPosition().immutable() : null;
@@ -249,6 +293,7 @@ public class LocalBehaviorController {
         this.expeditionKnownHazards = new ArrayList<>();
         this.expeditionSupplyStatus = "idle";
         this.resetExpeditionMoveWatch();
+        this.resetConstructionPathRecovery();
         this.resetBranchPattern();
         this.resetTorchPattern();
         this.placeTarget = null;
@@ -308,6 +353,18 @@ public class LocalBehaviorController {
         if (this.workMessageCooldownTicks > 0) {
             this.workMessageCooldownTicks--;
         }
+        if (this.woodSearchCooldownTicks > 0) {
+            this.woodSearchCooldownTicks--;
+        }
+        if (this.resourceSearchCooldownTicks > 0) {
+            this.resourceSearchCooldownTicks--;
+        }
+        if (this.resourceRejectedTargetTicks > 0) {
+            this.resourceRejectedTargetTicks--;
+            if (this.resourceRejectedTargetTicks <= 0) {
+                this.resourceRejectedTarget = null;
+            }
+        }
 
         switch (task.type()) {
             case FOLLOW_PLAYER -> this.followPlayer(task);
@@ -330,9 +387,14 @@ public class LocalBehaviorController {
 
     public void stopTransientTargets() {
         this.woodTarget = null;
+        this.woodSearchCooldownTicks = 0;
         this.resetWoodExploreTarget();
         this.resourceTarget = null;
         this.resourceTargetKind = null;
+        this.resourceSearchCooldownTicks = 0;
+        this.resourceRejectedTarget = null;
+        this.resourceRejectedTargetTicks = 0;
+        this.resetResourceExplore();
         this.expeditionDigTarget = null;
         this.expeditionDirection = null;
         this.expeditionSupplyPoint = null;
@@ -362,6 +424,7 @@ public class LocalBehaviorController {
         this.expeditionKnownHazards = new ArrayList<>();
         this.expeditionSupplyStatus = "idle";
         this.resetExpeditionMoveWatch();
+        this.resetConstructionPathRecovery();
         this.resetBranchPattern();
         this.resetTorchPattern();
         this.placeTarget = null;
@@ -622,6 +685,8 @@ public class LocalBehaviorController {
                 + ", " + this.smeltingAdapter.status()
                 + ", station=" + this.craftingStationSummary()
                 + ", furnace=" + this.furnaceStationSummary()
+                + ", construction=" + this.constructionPathSummary()
+                + ", resourceExplore=" + this.resourceExploreSummary()
                 + ", expedition=" + this.expeditionSummary()
                 + ", workflow=" + this.workflowSummary();
     }
@@ -676,7 +741,7 @@ public class LocalBehaviorController {
             return;
         }
 
-        this.friend.getPerception().refreshNow();
+        this.friend.getPerception().currentOrRefresh();
 
         if (this.collectOneLogIntoInventory(serverLevel)) {
             this.friend.getFriendBrain().completeTask();
@@ -688,7 +753,7 @@ public class LocalBehaviorController {
             return;
         }
 
-        PerceptionSnapshot snapshot = this.friend.getPerception().refreshNow();
+        PerceptionSnapshot snapshot = this.friend.getPerception().currentOrRefresh();
         if ((task.type() == FriendTaskType.MINE_RESOURCE || task.type() == FriendTaskType.MINING_EXPEDITION)
                 && this.handleMiningExpeditionSafety(serverLevel, task, snapshot)) {
             return;
@@ -1409,6 +1474,9 @@ public class LocalBehaviorController {
             }
 
             WorkStep step = current.get();
+            if (this.completeCurrentInventoryStepIfSatisfied(step)) {
+                continue;
+            }
             boolean advanced = switch (step.type()) {
                 case ACQUIRE_ITEM -> this.executeAcquireItemStep(serverLevel, step);
                 case CRAFT_ITEM -> this.executeCraftItemStep(serverLevel, step);
@@ -1603,6 +1671,32 @@ public class LocalBehaviorController {
         return false;
     }
 
+    private boolean completeCurrentInventoryStepIfSatisfied(WorkStep step) {
+        if (step.type() != WorkStepType.ACQUIRE_ITEM && step.type() != WorkStepType.CRAFT_ITEM) {
+            return false;
+        }
+        Optional<Predicate<ItemStack>> matcher = this.workflowStepInventoryMatcher(step.target());
+        if (matcher.isEmpty() || this.friend.countInventoryItems(matcher.get()) < step.amount()) {
+            return false;
+        }
+        if (step.type() == WorkStepType.ACQUIRE_ITEM) {
+            this.finishResourceExplore();
+        }
+        this.workflow.completeCurrent("already in inventory");
+        return true;
+    }
+
+    private Optional<Predicate<ItemStack>> workflowStepInventoryMatcher(String target) {
+        if (WorkflowFactory.LOGS.equals(target)) {
+            return Optional.of(stack -> stack.is(ItemTags.LOGS));
+        }
+        Optional<MiningTargetRegistry.MiningTarget> miningTarget = MiningTargetRegistry.find(target);
+        if (miningTarget.isPresent()) {
+            return Optional.of(miningTarget.get().inventoryMatcher());
+        }
+        return Optional.of(this.recipeMatcherFor(target));
+    }
+
     private boolean executeCraftItemStep(ServerLevel serverLevel, WorkStep step) {
         if (WorkflowFactory.PLANKS.equals(step.target())) {
             return this.executeCraftPlanksStep(serverLevel, step);
@@ -1727,8 +1821,7 @@ public class LocalBehaviorController {
             return false;
         }
 
-        Optional<BlockPos> visibleTarget = this.findNearestMineableSource(serverLevel, 18, target.sourceBlocks());
-        if (visibleTarget.isPresent()) {
+        if (this.refreshResourceTargetIfDue(serverLevel, step.target(), target.sourceBlocks())) {
             return this.executeAcquireMineableResourceStep(
                     serverLevel,
                     step,
@@ -1755,7 +1848,8 @@ public class LocalBehaviorController {
     }
 
     private boolean executeAcquireLogStep(ServerLevel serverLevel, WorkStep step) {
-        if (this.workflowOutputSatisfied() || this.countPlanks() >= this.requiredPlanksForWorkflow() || this.countLogs() >= step.amount()) {
+        int requiredPlanks = this.requiredPlanksForPendingWorkflow(serverLevel);
+        if (this.workflowOutputSatisfied() || this.availablePlankEquivalent() >= requiredPlanks) {
             this.workflow.completeCurrent("already have materials");
             return true;
         }
@@ -1768,7 +1862,7 @@ public class LocalBehaviorController {
 
         step.running("collecting log");
         if (this.collectOneLogIntoInventory(serverLevel)) {
-            if (this.countLogs() >= step.amount() || this.countPlanks() >= this.requiredPlanksForWorkflow()) {
+            if (this.availablePlankEquivalent() >= requiredPlanks) {
                 this.workflow.completeCurrent("log collected");
             }
             return true;
@@ -1777,7 +1871,8 @@ public class LocalBehaviorController {
     }
 
     private boolean executeCraftPlanksStep(ServerLevel serverLevel, WorkStep step) {
-        if (this.workflowOutputSatisfied() || this.countPlanks() >= step.amount()) {
+        int requiredPlanks = this.requiredPlanksForPendingWorkflow(serverLevel);
+        if (this.workflowOutputSatisfied() || this.countPlanks() >= requiredPlanks) {
             this.workflow.completeCurrent("already have planks");
             return true;
         }
@@ -1789,7 +1884,7 @@ public class LocalBehaviorController {
         step.running("crafting planks");
         if (this.craftPlanksFromLog(serverLevel)) {
             this.say("I turned a log into planks.");
-            if (this.countPlanks() >= step.amount()) {
+            if (this.countPlanks() >= requiredPlanks) {
                 this.workflow.completeCurrent("crafted planks");
             }
             return true;
@@ -2178,7 +2273,11 @@ public class LocalBehaviorController {
         if (this.woodTarget == null
                 || !isBreakableLog(serverLevel, this.woodTarget)
                 || !this.isReachableMiningTarget(serverLevel, this.woodTarget)) {
-            this.woodTarget = this.findNearestReachableLog(serverLevel, WOOD_SEARCH_RADIUS).orElse(null);
+            this.woodTarget = null;
+            if (this.woodSearchCooldownTicks <= 0) {
+                this.woodTarget = this.findNearestReachableLog(serverLevel, WOOD_SEARCH_RADIUS).orElse(null);
+                this.woodSearchCooldownTicks = WOOD_SEARCH_INTERVAL_TICKS;
+            }
             if (this.woodTarget == null) {
                 return this.exploreForWood(serverLevel);
             }
@@ -2201,6 +2300,7 @@ public class LocalBehaviorController {
             case BROKEN -> {
                 this.say("Collected wood. Inventory: " + this.friend.getInventorySummary());
                 this.woodTarget = null;
+                this.woodSearchCooldownTicks = 0;
                 this.resetWoodExploreTarget();
                 return true;
             }
@@ -2223,8 +2323,12 @@ public class LocalBehaviorController {
             String displayName,
             Block... sourceBlocks
     ) {
+        if (!this.resourceExploreBreadcrumbs.isEmpty()) {
+            this.rememberResourceExploreBreadcrumb(this.friend.blockPosition());
+        }
         int current = this.friend.countInventoryItems(inventoryMatcher);
         if (this.workflowOutputSatisfied() || current >= step.amount()) {
+            this.finishResourceExplore();
             this.workflow.completeCurrent("already have " + displayName);
             return true;
         }
@@ -2235,18 +2339,16 @@ public class LocalBehaviorController {
             return false;
         }
 
-        String targetKind = step.target();
-        if (!targetKind.equals(this.resourceTargetKind)
-                || this.resourceTarget == null
-                || !this.isVisibleMineableSource(serverLevel, this.resourceTarget, sourceBlocks)) {
-            this.resourceTarget = this.findNearestMineableSource(serverLevel, 18, sourceBlocks).orElse(null);
-            this.resourceTargetKind = targetKind;
-        }
+        this.refreshResourceTargetIfDue(serverLevel, step.target(), sourceBlocks);
 
         if (this.resourceTarget == null) {
-            step.running("searching for " + displayName);
-            this.sayThrottled("I need " + displayName + ", but I do not see an exposed reachable block nearby.");
-            return false;
+            return MiningTargetRegistry.find(step.target())
+                    .map(target -> this.exploreForMineableResource(serverLevel, step, target))
+                    .orElseGet(() -> {
+                        step.running("searching for " + displayName);
+                        this.sayThrottled("I need " + displayName + ", but I do not see an exposed reachable block nearby.");
+                        return false;
+                    });
         }
 
         double distance = this.friend.getEyePosition().distanceTo(net.minecraft.world.phys.Vec3.atCenterOf(this.resourceTarget));
@@ -2259,13 +2361,19 @@ public class LocalBehaviorController {
                 this.sayThrottled("That " + displayName + " is not reachable like a survival player. Looking for another target.");
                 return false;
             }
-            if (this.friend.getCurrentTask() != null
+            boolean expeditionApproachStalled = this.friend.getCurrentTask() != null
                     && this.friend.getCurrentTask().type() == FriendTaskType.MINING_EXPEDITION
-                    && this.isExpeditionMoveStalled(approachTarget.get(), "approach " + displayName)) {
+                    && this.isExpeditionMoveStalled(approachTarget.get(), "approach " + displayName);
+            boolean ordinaryApproachStalled = (this.friend.getCurrentTask() == null
+                    || this.friend.getCurrentTask().type() != FriendTaskType.MINING_EXPEDITION)
+                    && this.isResourceExploreMoveStalled(approachTarget.get(), RESOURCE_TARGET_APPROACH_STALL_TICKS);
+            if (expeditionApproachStalled || ordinaryApproachStalled) {
                 this.body.stop();
-                this.resourceTarget = null;
+                this.rejectResourceTarget();
                 step.running("approach to " + displayName + " stalled");
-                this.setExpeditionSupplyStatus("searching: approach stalled");
+                if (expeditionApproachStalled) {
+                    this.setExpeditionSupplyStatus("searching: approach stalled");
+                }
                 this.sayThrottled("I cannot reach that " + displayName + " safely, so I am looking for another route.");
                 return false;
             }
@@ -2281,17 +2389,20 @@ public class LocalBehaviorController {
                 serverLevel,
                 this.resourceTarget,
                 () -> cachedApproachTarget.isPresent() ? cachedApproachTarget : this.findStandPositionNearBlock(serverLevel, this.resourceTarget),
-                TASK_SPEED
+                TASK_SPEED,
+                cachedApproachTarget.map(pos -> this.friend.blockPosition().distSqr(pos) <= 4.0D).orElse(false)
         );
         switch (result) {
             case BROKEN -> {
                 BlockPos minedTarget = this.resourceTarget;
                 this.resourceTarget = null;
+                this.resourceSearchCooldownTicks = 0;
                 int minedCount = this.friend.countInventoryItems(inventoryMatcher);
                 if (minedCount > current) {
-                    this.rememberVisibleExpeditionTargetMiningSuccess(step, minedCount, minedTarget);
+                    this.rememberVisibleExpeditionTargetMiningSuccess(step, minedCount, minedCount - current, minedTarget);
                 }
                 if (minedCount >= step.amount()) {
+                    this.finishResourceExplore();
                     this.rememberResourceKnowledge(
                             step.target(),
                             "Observed success: mined " + displayName + " in " + serverLevel.dimension().location() + " using targeted survival-style block breaking.",
@@ -2313,9 +2424,302 @@ public class LocalBehaviorController {
         return false;
     }
 
+    private boolean exploreForMineableResource(
+            ServerLevel level,
+            WorkStep step,
+            MiningTargetRegistry.MiningTarget target
+    ) {
+        MiningTargetRegistry.ExplorationProfile profile = target.explorationProfile();
+        if (profile == null) {
+            step.running("searching for " + target.displayName());
+            this.sayThrottled("I need " + target.displayName() + ", but I do not see an exposed reachable block nearby.");
+            return false;
+        }
+
+        String currentDimension = level.dimension().location().toString();
+        if (!profile.dimension().equals(currentDimension)) {
+            step.failed("wrong dimension for resource exploration");
+            this.friend.getFriendBrain().failTask("I need "
+                    + target.displayName()
+                    + " in "
+                    + profile.dimension()
+                    + ", but I am in "
+                    + currentDimension
+                    + ". I cannot change dimensions by myself yet.");
+            return false;
+        }
+
+        this.ensureResourceExploreState(step.target(), profile);
+        this.updateResourceExploreTraversalProgress();
+        BlockPos current = this.friend.blockPosition();
+        Direction direction = this.resourceExploreDirection();
+        BlockPos nextFeet;
+        String label;
+        if (current.getY() > profile.preferredYMax()) {
+            nextFeet = current.relative(direction).below();
+            label = "resource exploration staircase down";
+        } else if (current.getY() < profile.preferredYMin()) {
+            nextFeet = current.relative(direction).above();
+            label = "resource exploration staircase up";
+        } else {
+            nextFeet = current.relative(direction);
+            label = "resource exploration tunnel";
+        }
+
+        if (!this.canUsePassageFoot(level, nextFeet)) {
+            this.rotateResourceExploreDirection();
+            step.running("finding safe resource exploration direction");
+            this.sayThrottled("I do not see exposed reachable "
+                    + target.displayName()
+                    + ", so I am rotating toward a safer exploration route.");
+            return false;
+        }
+
+        step.running("digging " + label);
+        this.sayThrottled("I do not see exposed reachable "
+                + target.displayName()
+                + ", so I am digging a survival "
+                + (label.contains("staircase") ? "staircase" : "traversal tunnel")
+                + " toward Y "
+                + profile.preferredYMin()
+                + ".."
+                + profile.preferredYMax()
+                + ".");
+        return this.moveOrDigResourceExplorePassage(level, step, nextFeet, label);
+    }
+
+    private boolean moveOrDigResourceExplorePassage(
+            ServerLevel level,
+            WorkStep step,
+            BlockPos nextFeet,
+            String label
+    ) {
+        Optional<BlockPos> blocker = this.firstBlockingPassageBlock(level, nextFeet);
+        if (blocker.isEmpty() && FriendPerception.canStandAt(level, nextFeet)) {
+            this.resourceExploreDigTarget = null;
+            if (this.isResourceExploreMoveStalled(nextFeet)) {
+                this.body.stop();
+                this.rotateResourceExploreDirection();
+                step.running("movement stalled in " + label);
+                this.sayThrottled("The resource exploration route stalled, so I am rotating toward another passage.");
+                return false;
+            }
+            this.body.moveToNearby(nextFeet, TASK_SPEED);
+            step.running("moving through " + label);
+            return false;
+        }
+
+        if (blocker.isEmpty()) {
+            this.rotateResourceExploreDirection();
+            step.running("blocked by unsafe " + label);
+            return false;
+        }
+
+        BlockPos digTarget = blocker.get();
+        this.resourceExploreDigTarget = digTarget;
+        BlockState state = level.getBlockState(digTarget);
+        if (state.hasBlockEntity()
+                || state.getDestroySpeed(level, digTarget) < 0.0F
+                || !state.getFluidState().isEmpty()
+                || this.hasNearbyFluidHazard(level, digTarget)
+                || this.hasNearbyFluidLeak(level, digTarget)
+                || this.isRiskyExpeditionPassageBlock(state)) {
+            this.rotateResourceExploreDirection();
+            step.running("avoiding unsafe block in " + label);
+            return false;
+        }
+
+        if (!this.interaction.canReachBlock(digTarget)) {
+            Optional<BlockPos> approach = this.findStandPositionNearBlock(level, digTarget);
+            if (approach.isEmpty()) {
+                this.rotateResourceExploreDirection();
+                step.running("no safe dig approach for " + label);
+                return false;
+            }
+            if (this.isResourceExploreMoveStalled(approach.get())) {
+                this.body.stop();
+                this.rotateResourceExploreDirection();
+                step.running("dig approach stalled in " + label);
+                this.sayThrottled("I could not reach that exploration dig position, so I am rotating toward another passage.");
+                return false;
+            }
+            this.body.moveTo(approach.get(), TASK_SPEED);
+            step.running("moving to dig " + label);
+            return false;
+        }
+
+        this.resetResourceExploreMoveWatch();
+        this.body.stop();
+        SurvivalWorldInteractor.BreakResult result = this.interaction.tickBreakBlock(level, digTarget);
+        switch (result) {
+            case BROKEN -> {
+                this.resourceExploreDigTarget = null;
+                this.resourceSearchCooldownTicks = 0;
+                step.running("dug " + label);
+                return false;
+            }
+            case FAILED -> {
+                this.rotateResourceExploreDirection();
+                step.running("failed to dig " + label);
+                return false;
+            }
+            case NOT_IN_REACH, WORKING -> {
+                step.running("digging " + label);
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private void ensureResourceExploreState(
+            String targetKind,
+            MiningTargetRegistry.ExplorationProfile profile
+    ) {
+        if (Objects.equals(targetKind, this.resourceExploreKind) && this.resourceExploreDirection != null) {
+            return;
+        }
+        this.resetResourceExplore();
+        this.resourceExploreKind = targetKind;
+        this.resourceExploreDirection = HORIZONTAL_EXPEDITION_DIRECTIONS[this.friend.getRandom().nextInt(HORIZONTAL_EXPEDITION_DIRECTIONS.length)];
+        this.resourceExploreBaseSegmentLength = Math.max(3, profile.traversalSegmentLength());
+        this.resourceExploreStepsRemaining = this.resourceExploreBaseSegmentLength;
+        this.resourceExploreLastStepPos = this.friend.blockPosition().immutable();
+        this.rememberResourceExploreBreadcrumb(this.resourceExploreLastStepPos);
+    }
+
+    private void updateResourceExploreTraversalProgress() {
+        BlockPos current = this.friend.blockPosition().immutable();
+        if (this.resourceExploreLastStepPos == null) {
+            this.resourceExploreLastStepPos = current;
+            return;
+        }
+        if (current.equals(this.resourceExploreLastStepPos)) {
+            return;
+        }
+        this.resourceExploreLastStepPos = current;
+        this.rememberResourceExploreBreadcrumb(current);
+        this.resourceExploreStepsRemaining--;
+        if (this.resourceExploreStepsRemaining <= 0) {
+            this.rotateResourceExploreDirection();
+        }
+    }
+
+    private Direction resourceExploreDirection() {
+        if (this.resourceExploreDirection == null || this.resourceExploreDirection.getAxis().isVertical()) {
+            Direction facing = this.friend.getDirection();
+            this.resourceExploreDirection = facing.getAxis().isVertical() ? Direction.NORTH : facing;
+        }
+        return this.resourceExploreDirection;
+    }
+
+    private void rotateResourceExploreDirection() {
+        Direction base = this.resourceExploreDirection();
+        this.resourceExploreDirection = base.getClockWise();
+        this.resourceExploreTurns++;
+        this.resourceExploreStepsRemaining = this.resourceExploreBaseSegmentLength + (this.resourceExploreTurns / 2) * 2;
+        this.resourceExploreDigTarget = null;
+        this.resetResourceExploreMoveWatch();
+        this.interaction.cancelBreakBlock();
+    }
+
+    private boolean isResourceExploreMoveStalled(BlockPos target) {
+        return this.isResourceExploreMoveStalled(target, RESOURCE_EXPLORE_MOVE_STALL_TICKS);
+    }
+
+    private boolean isResourceExploreMoveStalled(BlockPos target, int stallTicks) {
+        if (target == null) {
+            this.resetResourceExploreMoveWatch();
+            return false;
+        }
+        BlockPos current = this.friend.blockPosition().immutable();
+        if (this.resourceExploreMoveWatchTarget == null || !this.resourceExploreMoveWatchTarget.equals(target)) {
+            this.resourceExploreMoveWatchTarget = target.immutable();
+            this.resourceExploreMoveWatchLastPos = current;
+            this.resourceExploreMoveWatchTicks = 0;
+            return false;
+        }
+        if (!current.equals(this.resourceExploreMoveWatchLastPos)) {
+            this.resourceExploreMoveWatchLastPos = current;
+            this.resourceExploreMoveWatchTicks = 0;
+            return false;
+        }
+        this.resourceExploreMoveWatchTicks++;
+        return this.resourceExploreMoveWatchTicks >= stallTicks;
+    }
+
+    private void resetResourceExploreMoveWatch() {
+        this.resourceExploreMoveWatchTarget = null;
+        this.resourceExploreMoveWatchLastPos = null;
+        this.resourceExploreMoveWatchTicks = 0;
+    }
+
+    private void resetResourceExplore() {
+        this.finishResourceExplore();
+        this.resourceExploreBreadcrumbs = new ArrayList<>();
+    }
+
+    private void finishResourceExplore() {
+        this.resourceExploreKind = null;
+        this.resourceExploreDigTarget = null;
+        this.resourceExploreDirection = null;
+        this.resourceExploreLastStepPos = null;
+        this.resourceExploreBaseSegmentLength = 0;
+        this.resourceExploreStepsRemaining = 0;
+        this.resourceExploreTurns = 0;
+        this.resetResourceExploreMoveWatch();
+    }
+
+    private void rememberResourceExploreBreadcrumb(BlockPos pos) {
+        if (pos == null) {
+            return;
+        }
+        if (!this.resourceExploreBreadcrumbs.isEmpty()
+                && this.resourceExploreBreadcrumbs.get(this.resourceExploreBreadcrumbs.size() - 1).equals(pos)) {
+            return;
+        }
+        this.resourceExploreBreadcrumbs.add(pos.immutable());
+        while (this.resourceExploreBreadcrumbs.size() > RESOURCE_EXPLORE_BREADCRUMB_LIMIT) {
+            this.resourceExploreBreadcrumbs.remove(0);
+        }
+    }
+
+    private boolean moveBackAlongResourceExplorePath(WorkStep step, String destinationLabel) {
+        if (this.resourceExploreBreadcrumbs.isEmpty()) {
+            return false;
+        }
+
+        BlockPos current = this.friend.blockPosition().immutable();
+        while (!this.resourceExploreBreadcrumbs.isEmpty()
+                && this.resourceExploreBreadcrumbs.get(this.resourceExploreBreadcrumbs.size() - 1).equals(current)) {
+            this.resourceExploreBreadcrumbs.remove(this.resourceExploreBreadcrumbs.size() - 1);
+        }
+        if (this.resourceExploreBreadcrumbs.isEmpty()) {
+            this.resetResourceExploreMoveWatch();
+            return false;
+        }
+
+        BlockPos previous = this.resourceExploreBreadcrumbs.get(this.resourceExploreBreadcrumbs.size() - 1);
+        if (this.isResourceExploreMoveStalled(previous)) {
+            this.body.stop();
+            this.resourceExploreBreadcrumbs = new ArrayList<>();
+            this.resetResourceExploreMoveWatch();
+            return false;
+        }
+
+        step.running("backtracking resource exploration route to " + destinationLabel);
+        this.sayThrottled("Returning along the explored mining route before moving to the " + destinationLabel + ".");
+        if (current.distSqr(previous) <= 4.0D) {
+            this.body.moveToNearby(previous, TASK_SPEED);
+        } else {
+            this.body.moveTo(previous, TASK_SPEED);
+        }
+        return true;
+    }
+
     private void rememberVisibleExpeditionTargetMiningSuccess(
             WorkStep step,
-            int minedCount,
+            int minedTotal,
+            int minedDelta,
             BlockPos minedTarget
     ) {
         FriendTask task = this.friend.getCurrentTask();
@@ -2324,17 +2728,19 @@ public class LocalBehaviorController {
                 || step.type() != WorkStepType.BRANCH_MINE_RESOURCE) {
             return;
         }
-        if (minedCount <= 0) {
+        if (minedTotal <= 0 || minedDelta <= 0) {
             return;
         }
         BlockPos hitPos = minedTarget == null ? this.friend.blockPosition() : minedTarget;
         this.rememberPortableNote(task, "expedition mined "
                 + step.target()
                 + " amount="
-                + minedCount
+                + minedDelta
+                + " total="
+                + minedTotal
                 + " pos="
                 + this.formatPos(hitPos));
-        this.rememberExpeditionMiningSuccess(task, step.target(), minedCount, hitPos);
+        this.rememberExpeditionMiningSuccess(task, step.target(), minedTotal, minedDelta, hitPos);
     }
 
     private boolean craftPlanksFromLog(ServerLevel level) {
@@ -2380,6 +2786,79 @@ public class LocalBehaviorController {
         return this.friend.countInventoryItems(stack -> stack.is(ItemTags.PLANKS));
     }
 
+    private int availablePlankEquivalent() {
+        return this.countPlanks() + this.countLogs() * 4;
+    }
+
+    private int requiredPlanksForPendingWorkflow(ServerLevel level) {
+        if (this.workflow == null) {
+            return 0;
+        }
+
+        int requiredPlanks = 0;
+        int availableSticks = this.countSticks();
+        boolean craftingTableReady = this.hasCraftingTable() || this.findNearbyCraftingTable(level, 12).isPresent();
+        for (WorkStep pending : this.workflow.pendingSteps()) {
+            if (pending.type() != WorkStepType.CRAFT_ITEM) {
+                continue;
+            }
+            switch (pending.target()) {
+                case WorkflowFactory.PLANKS -> {
+                    FriendTask task = this.friend.getCurrentTask();
+                    if (task != null
+                            && task.type() == FriendTaskType.CRAFT_ITEM
+                            && WorkflowFactory.PLANKS.equals(task.target())) {
+                        requiredPlanks = Math.max(requiredPlanks, pending.amount());
+                    }
+                }
+                case WorkflowFactory.CRAFTING_TABLE -> {
+                    if (!craftingTableReady) {
+                        requiredPlanks += 4;
+                        craftingTableReady = true;
+                    }
+                }
+                case WorkflowFactory.STICKS -> {
+                    int missingSticks = Math.max(0, pending.amount() - availableSticks);
+                    int stickCrafts = divideRoundUp(missingSticks, 4);
+                    requiredPlanks += stickCrafts * 2;
+                    availableSticks += stickCrafts * 4;
+                }
+                case WorkflowFactory.CHEST -> {
+                    int missingChests = Math.max(0, pending.amount() - (this.hasChest() ? 1 : 0));
+                    requiredPlanks += missingChests * 8;
+                }
+                case WorkflowFactory.WOODEN_AXE -> {
+                    int missingAxes = Math.max(0, pending.amount() - this.countWoodenAxes());
+                    int requiredSticks = missingAxes * 2;
+                    int stickCrafts = divideRoundUp(Math.max(0, requiredSticks - availableSticks), 4);
+                    requiredPlanks += missingAxes * 3 + stickCrafts * 2;
+                    availableSticks += stickCrafts * 4 - requiredSticks;
+                }
+                case WorkflowFactory.WOODEN_PICKAXE -> {
+                    int missingPickaxes = Math.max(0, pending.amount() - this.countWoodenPickaxes());
+                    int requiredSticks = missingPickaxes * 2;
+                    int stickCrafts = divideRoundUp(Math.max(0, requiredSticks - availableSticks), 4);
+                    requiredPlanks += missingPickaxes * 3 + stickCrafts * 2;
+                    availableSticks += stickCrafts * 4 - requiredSticks;
+                }
+                case WorkflowFactory.TORCH -> {
+                    int missingTorches = Math.max(0, pending.amount() - this.countTorches());
+                    int torchCrafts = divideRoundUp(missingTorches, 4);
+                    int stickCrafts = divideRoundUp(Math.max(0, torchCrafts - availableSticks), 4);
+                    requiredPlanks += stickCrafts * 2;
+                    availableSticks += stickCrafts * 4 - torchCrafts;
+                }
+                default -> {
+                }
+            }
+        }
+        return requiredPlanks;
+    }
+
+    private static int divideRoundUp(int value, int divisor) {
+        return value <= 0 ? 0 : (value + divisor - 1) / divisor;
+    }
+
     private int countLogs() {
         return this.friend.countInventoryItems(stack -> stack.is(ItemTags.LOGS));
     }
@@ -2418,6 +2897,20 @@ public class LocalBehaviorController {
             return Blocks.NETHERRACK;
         }
         return null;
+    }
+
+    private int countConstructionRepairBlocks() {
+        FriendTask task = this.friend.getCurrentTask();
+        return this.countFloorRepairItems(task, Items.COBBLESTONE)
+                + this.countFloorRepairItems(task, Items.COBBLED_DEEPSLATE)
+                + this.countFloorRepairItems(task, Items.DIRT)
+                + this.countFloorRepairItems(task, Items.NETHERRACK);
+    }
+
+    private int countFloorRepairItems(FriendTask task, net.minecraft.world.item.Item item) {
+        return this.canUseForFloorRepair(task, item)
+                ? this.friend.countInventoryItems(stack -> stack.is(item))
+                : 0;
     }
 
     private boolean canUseForFloorRepair(FriendTask task, net.minecraft.world.item.Item item) {
@@ -2497,13 +2990,31 @@ public class LocalBehaviorController {
         }
 
         if (!this.interaction.canReachBlock(this.craftingStationTarget)) {
+            if (this.moveBackAlongResourceExplorePath(step, "crafting table")) {
+                return false;
+            }
             step.running("moving to crafting table");
             this.sayThrottled("Moving to the crafting table at " + this.formatPos(this.craftingStationTarget) + ".");
-            BlockPos approachTarget = this.findStandPositionNearBlock(level, this.craftingStationTarget).orElse(this.craftingStationTarget);
+            Optional<BlockPos> approach = this.findStandPositionNearBlock(level, this.craftingStationTarget);
+            if (approach.isEmpty()) {
+                this.tickStationConstructionRecovery(level, step, this.craftingStationTarget, "crafting table");
+                return false;
+            }
+            BlockPos approachTarget = approach.get();
+            if (this.isExpeditionMoveStalled(approachTarget, "moving to crafting table")) {
+                this.body.stop();
+                this.resetExpeditionMoveWatch();
+                this.tickStationConstructionRecovery(level, step, this.craftingStationTarget, "crafting table");
+                return false;
+            }
+            this.resetConstructionPathRecovery();
             this.body.moveTo(approachTarget, TASK_SPEED);
             return false;
         }
 
+        this.resetExpeditionMoveWatch();
+        this.resetConstructionPathRecovery();
+        this.resourceExploreBreadcrumbs = new ArrayList<>();
         this.body.stop();
         return true;
     }
@@ -2517,14 +3028,283 @@ public class LocalBehaviorController {
             return false;
         }
         if (!this.interaction.canReachBlock(this.furnaceStationTarget)) {
+            if (this.moveBackAlongResourceExplorePath(step, "furnace")) {
+                return false;
+            }
             step.running("moving to furnace");
             this.sayThrottled("Moving to the furnace at " + this.formatPos(this.furnaceStationTarget) + ".");
-            BlockPos approachTarget = this.findStandPositionNearBlock(level, this.furnaceStationTarget).orElse(this.furnaceStationTarget);
+            Optional<BlockPos> approach = this.findStandPositionNearBlock(level, this.furnaceStationTarget);
+            if (approach.isEmpty()) {
+                this.tickStationConstructionRecovery(level, step, this.furnaceStationTarget, "furnace");
+                return false;
+            }
+            BlockPos approachTarget = approach.get();
+            if (this.isExpeditionMoveStalled(approachTarget, "moving to furnace")) {
+                this.body.stop();
+                this.resetExpeditionMoveWatch();
+                this.tickStationConstructionRecovery(level, step, this.furnaceStationTarget, "furnace");
+                return false;
+            }
+            this.resetConstructionPathRecovery();
             this.body.moveTo(approachTarget, TASK_SPEED);
             return false;
         }
+        this.resetExpeditionMoveWatch();
+        this.resetConstructionPathRecovery();
+        this.resourceExploreBreadcrumbs = new ArrayList<>();
         this.body.stop();
         return true;
+    }
+
+    private void tickStationConstructionRecovery(ServerLevel level, WorkStep step, BlockPos station, String label) {
+        Optional<BlockPos> destination = this.findConstructionStandPositionNearBlock(level, station);
+        if (destination.isEmpty()) {
+            step.failed("no construction destination for " + label);
+            this.friend.getFriendBrain().failTask("I cannot find a safe place to build a route back to the " + label + ".");
+            return;
+        }
+
+        ConstructionTravelResult result = this.tickConstructionTravel(level, destination.get(), label);
+        switch (result) {
+            case WORKING -> {
+                step.running("constructing route to " + label);
+                this.sayThrottled("Ordinary pathfinding failed. I am digging or repairing a short route to the "
+                        + label
+                        + ".");
+            }
+            case COMPLETE -> step.running("construction route to " + label + " completed");
+            case FAILED -> {
+                step.failed("construction route to " + label + " failed");
+                this.friend.getFriendBrain().failTask("I cannot safely construct a route back to the " + label + ".");
+            }
+        }
+    }
+
+    private ConstructionTravelResult tickConstructionTravel(ServerLevel level, BlockPos destination, String label) {
+        if (destination == null) {
+            this.resetConstructionPathRecovery();
+            return ConstructionTravelResult.FAILED;
+        }
+        if (this.friend.blockPosition().equals(destination)) {
+            this.resetConstructionPathRecovery();
+            return ConstructionTravelResult.COMPLETE;
+        }
+        if (this.constructionPathTarget == null || !this.constructionPathTarget.equals(destination)) {
+            this.resetConstructionPathRecovery();
+            this.constructionPathOrigin = this.friend.blockPosition().immutable();
+            this.constructionPathTarget = destination.immutable();
+            this.constructionPathLabel = label == null || label.isBlank() ? "destination" : label;
+        }
+
+        if (this.constructionPathPlan == null) {
+            if (this.constructionPathFuture == null) {
+                int repairBlocks = this.countConstructionRepairBlocks();
+                ConstructionPathSnapshot snapshot = this.constructionPathLlmPlanner.capture(
+                        level,
+                        this.constructionPathOrigin,
+                        this.constructionPathTarget,
+                        repairBlocks
+                );
+                this.constructionPathFuture = this.constructionPathLlmPlanner.planAsync(this.friend.getUUID(), snapshot);
+                this.body.stop();
+            }
+            if (!this.constructionPathFuture.isDone()) {
+                return ConstructionTravelResult.WORKING;
+            }
+
+            Optional<ConstructionRoutePlan> llmPlan;
+            try {
+                llmPlan = this.constructionPathFuture.getNow(Optional.empty());
+            } catch (RuntimeException ignored) {
+                llmPlan = Optional.empty();
+            }
+            this.constructionPathPlan = llmPlan
+                    .filter(plan -> this.isConstructionPlanUsable(level, plan))
+                    .orElseGet(() -> LocalConstructionPathfinder.plan(
+                            level,
+                            this.friend,
+                            this.constructionPathTarget,
+                            this.countConstructionRepairBlocks()
+                    ).orElse(null));
+            if (this.constructionPathPlan == null || !this.isConstructionPlanUsable(level, this.constructionPathPlan)) {
+                this.resetConstructionPathRecovery();
+                return ConstructionTravelResult.FAILED;
+            }
+            this.constructionPathStepIndex = 0;
+        }
+
+        if (this.constructionPathStepIndex >= this.constructionPathPlan.steps.size()) {
+            ConstructionTravelResult result = this.friend.blockPosition().equals(this.constructionPathTarget)
+                    ? ConstructionTravelResult.COMPLETE
+                    : ConstructionTravelResult.FAILED;
+            this.resetConstructionPathRecovery();
+            return result;
+        }
+
+        BlockPos current = this.friend.blockPosition().immutable();
+        BlockPos nextFeet = this.constructionPathPlan.steps
+                .get(this.constructionPathStepIndex)
+                .absoluteFrom(this.constructionPathOrigin);
+        if (current.equals(nextFeet)) {
+            this.constructionPathStepIndex++;
+            this.constructionPathLastMovePos = current;
+            this.constructionPathMoveStallTicks = 0;
+            return ConstructionTravelResult.WORKING;
+        }
+
+        Optional<LocalConstructionPathfinder.Transition> inspected = LocalConstructionPathfinder.inspectTransition(
+                level,
+                current,
+                nextFeet,
+                this.countConstructionRepairBlocks()
+        );
+        if (inspected.isEmpty()) {
+            this.resetConstructionPathRecovery();
+            return ConstructionTravelResult.FAILED;
+        }
+
+        LocalConstructionPathfinder.Transition transition = inspected.get();
+        if (transition.floorToPlace() != null) {
+            Block block = this.expeditionFloorRepairBlockToPlace(this.friend.getCurrentTask());
+            if (block == null || !this.interaction.canReachBlock(transition.floorToPlace())) {
+                this.resetConstructionPathRecovery();
+                return ConstructionTravelResult.FAILED;
+            }
+            this.body.stop();
+            if (!this.interaction.placeBlock(
+                    level,
+                    transition.floorToPlace(),
+                    block,
+                    stack -> this.isMatchingFloorRepairBlock(stack, block)
+            )) {
+                this.resetConstructionPathRecovery();
+                return ConstructionTravelResult.FAILED;
+            }
+            return ConstructionTravelResult.WORKING;
+        }
+
+        for (BlockPos blocker : transition.blockers()) {
+            if (this.isPassageSpaceClear(level, blocker)) {
+                continue;
+            }
+            if (!level.getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)
+                    || !this.interaction.canReachBlock(blocker)) {
+                this.resetConstructionPathRecovery();
+                return ConstructionTravelResult.FAILED;
+            }
+            this.body.stop();
+            SurvivalWorldInteractor.BreakResult result = this.interaction.tickBreakBlock(level, blocker);
+            if (result == SurvivalWorldInteractor.BreakResult.FAILED
+                    || result == SurvivalWorldInteractor.BreakResult.NOT_IN_REACH) {
+                this.resetConstructionPathRecovery();
+                return ConstructionTravelResult.FAILED;
+            }
+            return ConstructionTravelResult.WORKING;
+        }
+
+        if (this.isConstructionMoveStalled(current)) {
+            this.resetConstructionPathRecovery();
+            return ConstructionTravelResult.FAILED;
+        }
+        this.body.moveToNearby(nextFeet, TASK_SPEED);
+        return ConstructionTravelResult.WORKING;
+    }
+
+    private boolean isConstructionPlanUsable(ServerLevel level, ConstructionRoutePlan plan) {
+        if (plan == null || this.constructionPathOrigin == null || this.constructionPathTarget == null) {
+            return false;
+        }
+        plan.normalize();
+        if (plan.steps.isEmpty()) {
+            return false;
+        }
+
+        BlockPos current = this.constructionPathOrigin;
+        int repairBlocks = this.countConstructionRepairBlocks();
+        for (ConstructionRoutePlan.Step step : plan.steps) {
+            BlockPos next = step.absoluteFrom(this.constructionPathOrigin);
+            Optional<LocalConstructionPathfinder.Transition> transition = LocalConstructionPathfinder.inspectTransition(
+                    level,
+                    current,
+                    next,
+                    repairBlocks
+            );
+            if (transition.isEmpty()) {
+                return false;
+            }
+            if (transition.get().floorToPlace() != null) {
+                repairBlocks--;
+            }
+            current = next;
+        }
+        return current.equals(this.constructionPathTarget);
+    }
+
+    private boolean isConstructionMoveStalled(BlockPos current) {
+        if (this.constructionPathLastMovePos == null || !this.constructionPathLastMovePos.equals(current)) {
+            this.constructionPathLastMovePos = current;
+            this.constructionPathMoveStallTicks = 0;
+            return false;
+        }
+        this.constructionPathMoveStallTicks++;
+        return this.constructionPathMoveStallTicks >= CONSTRUCTION_MOVE_STALL_TICKS;
+    }
+
+    private void resetConstructionPathRecovery() {
+        this.constructionPathFuture = null;
+        this.constructionPathPlan = null;
+        this.constructionPathOrigin = null;
+        this.constructionPathTarget = null;
+        this.constructionPathLastMovePos = null;
+        this.constructionPathLabel = "none";
+        this.constructionPathStepIndex = 0;
+        this.constructionPathMoveStallTicks = 0;
+        this.interaction.cancelBreakBlock();
+    }
+
+    private Optional<BlockPos> findConstructionStandPositionNearBlock(ServerLevel level, BlockPos target) {
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -2; z <= 2; z++) {
+                for (int y = -1; y <= 1; y++) {
+                    BlockPos candidate = target.offset(x, y, z);
+                    if (candidate.equals(target)
+                            || candidate.below().equals(target)
+                            || !this.canStandAt(level, candidate)
+                            || !this.interaction.canReachBlockFrom(candidate, target)) {
+                        continue;
+                    }
+                    double distance = this.friend.blockPosition().distSqr(candidate);
+                    if (distance < bestDistance) {
+                        best = candidate.immutable();
+                        bestDistance = distance;
+                    }
+                }
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private String constructionPathSummary() {
+        if (this.constructionPathTarget == null) {
+            return "idle";
+        }
+        String source = this.constructionPathPlan == null
+                ? (this.constructionPathFuture == null ? "planning" : "waiting_llm_or_fallback")
+                : this.constructionPathPlan.source;
+        int stepCount = this.constructionPathPlan == null ? 0 : this.constructionPathPlan.steps.size();
+        return this.constructionPathLabel
+                + "@"
+                + this.formatPos(this.constructionPathTarget)
+                + ",source="
+                + source
+                + ",step="
+                + this.constructionPathStepIndex
+                + "/"
+                + stepCount
+                + ",stall="
+                + this.constructionPathMoveStallTicks;
     }
 
     private Optional<BlockPos> findNearbyCraftingTable(ServerLevel level, int radius) {
@@ -4446,7 +5226,7 @@ public class LocalBehaviorController {
                 continue;
             }
             double distanceSqr = Math.max(1.0D, anchor.distSqr(pos));
-            double amountBonus = Math.max(1, hit.amount) * 3.0D;
+            double amountBonus = this.resourceHitScoreAmount(hit) * 3.0D;
             double directionBonus = direction.getName().equalsIgnoreCase(hit.direction) ? 12.0D : 0.0D;
             score += (forward * forward * 24.0D / distanceSqr) + amountBonus + directionBonus;
         }
@@ -4548,14 +5328,28 @@ public class LocalBehaviorController {
     }
 
     private boolean moveOrDigPassage(ServerLevel level, WorkStep step, BlockPos nextFeet, String label) {
-        if (FriendPerception.canStandAt(level, nextFeet)) {
+        Optional<BlockPos> blocker = this.firstBlockingPassageBlock(level, nextFeet);
+        if (blocker.isEmpty() && FriendPerception.canStandAt(level, nextFeet)) {
             this.expeditionDigTarget = null;
-            this.body.moveTo(nextFeet, TASK_SPEED);
+            if (this.isExpeditionMoveStalled(nextFeet, "moving through " + label)) {
+                this.body.stop();
+                this.resetExpeditionMoveWatch();
+                this.rotatePassageDirection(label);
+                step.running("movement stalled in " + label);
+                this.sayThrottled("I could not move through that "
+                        + label
+                        + ", so I am rotating toward another route.");
+                this.rememberExpeditionRouteNote("route_stall", "movement stalled in "
+                        + label
+                        + " near "
+                        + this.formatPos(nextFeet));
+                return false;
+            }
+            this.body.moveToNearby(nextFeet, TASK_SPEED);
             step.running("moving through " + label);
             return false;
         }
 
-        Optional<BlockPos> blocker = this.firstBlockingPassageBlock(level, nextFeet);
         if (blocker.isEmpty()) {
             this.rotatePassageDirection(label);
             step.running("blocked by unsafe " + label);
@@ -4595,12 +5389,37 @@ public class LocalBehaviorController {
         }
 
         if (!this.interaction.canReachBlock(target)) {
-            BlockPos approach = this.findStandPositionNearBlock(level, target).orElse(this.friend.blockPosition());
-            this.body.moveTo(approach, TASK_SPEED);
+            Optional<BlockPos> approach = this.findStandPositionNearBlock(level, target);
+            if (approach.isEmpty()) {
+                this.resetExpeditionMoveWatch();
+                this.rotatePassageDirection(label);
+                step.running("no safe approach for " + label);
+                this.rememberExpeditionRouteNote("route_blocked", "no safe dig approach for "
+                        + label
+                        + " near "
+                        + this.formatPos(target));
+                return false;
+            }
+            if (this.isExpeditionMoveStalled(approach.get(), "approaching dig target in " + label)) {
+                this.body.stop();
+                this.resetExpeditionMoveWatch();
+                this.rotatePassageDirection(label);
+                step.running("dig approach stalled in " + label);
+                this.sayThrottled("I could not reach that "
+                        + label
+                        + " dig position, so I am rotating toward another route.");
+                this.rememberExpeditionRouteNote("route_stall", "dig approach stalled in "
+                        + label
+                        + " near "
+                        + this.formatPos(target));
+                return false;
+            }
+            this.body.moveTo(approach.get(), TASK_SPEED);
             step.running("moving to dig " + label);
             return false;
         }
 
+        this.resetExpeditionMoveWatch();
         this.body.stop();
         SurvivalWorldInteractor.BreakResult result = this.interaction.tickBreakBlock(level, target);
         switch (result) {
@@ -4657,7 +5476,14 @@ public class LocalBehaviorController {
     }
 
     private boolean canRepairPassageFloorAt(ServerLevel level, BlockPos floorPos, BlockPos feetPos) {
-        if (floorPos == null || feetPos == null || !level.hasChunkAt(floorPos)) {
+        if (floorPos == null
+                || feetPos == null
+                || !level.hasChunkAt(floorPos)
+                || !level.hasChunkAt(floorPos.below())
+                || !level.hasChunkAt(feetPos)
+                || !level.hasChunkAt(feetPos.above())
+                || !this.hasLoadedNeighborhood(level, floorPos)
+                || !this.hasLoadedNeighborhood(level, feetPos)) {
             return false;
         }
         BlockState floor = level.getBlockState(floorPos);
@@ -4690,15 +5516,32 @@ public class LocalBehaviorController {
         if (!this.isPassageSpaceClear(level, head)) {
             return Optional.of(head.immutable());
         }
+        if (nextFeet.getY() < this.friend.blockPosition().getY()) {
+            BlockPos descendingTransitionHead = nextFeet.above(2);
+            if (!this.isPassageSpaceClear(level, descendingTransitionHead)) {
+                return Optional.of(descendingTransitionHead.immutable());
+            }
+        }
         return Optional.empty();
     }
 
     private boolean isPassageSpaceClear(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
         BlockState state = level.getBlockState(pos);
         return state.getCollisionShape(level, pos).isEmpty() && state.getFluidState().isEmpty();
     }
 
     private boolean canUsePassageFoot(ServerLevel level, BlockPos feetPos) {
+        if (feetPos == null
+                || !level.hasChunkAt(feetPos)
+                || !level.hasChunkAt(feetPos.above())
+                || !level.hasChunkAt(feetPos.below())
+                || !this.hasLoadedNeighborhood(level, feetPos)
+                || !this.hasLoadedNeighborhood(level, feetPos.above())) {
+            return false;
+        }
         BlockState below = level.getBlockState(feetPos.below());
         return below.getFluidState().isEmpty()
                 && !below.isAir()
@@ -4736,9 +5579,15 @@ public class LocalBehaviorController {
     }
 
     private boolean hasNearbyFluidHazard(ServerLevel level, BlockPos center) {
+        if (center == null || !level.hasChunkAt(center)) {
+            return false;
+        }
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         for (Direction direction : Direction.values()) {
             cursor.setWithOffset(center, direction);
+            if (!level.hasChunkAt(cursor)) {
+                continue;
+            }
             if (level.getFluidState(cursor).is(FluidTags.LAVA)) {
                 return true;
             }
@@ -4747,9 +5596,15 @@ public class LocalBehaviorController {
     }
 
     private boolean hasNearbyFluidLeak(ServerLevel level, BlockPos center) {
+        if (center == null || !level.hasChunkAt(center)) {
+            return false;
+        }
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         for (Direction direction : Direction.values()) {
             cursor.setWithOffset(center, direction);
+            if (!level.hasChunkAt(cursor)) {
+                continue;
+            }
             if (this.isNonLavaFluid(level, cursor)) {
                 return true;
             }
@@ -4758,7 +5613,22 @@ public class LocalBehaviorController {
     }
 
     private boolean isNonLavaFluid(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
         return !level.getFluidState(pos).isEmpty() && !level.getFluidState(pos).is(FluidTags.LAVA);
+    }
+
+    private boolean hasLoadedNeighborhood(ServerLevel level, BlockPos center) {
+        if (center == null || !level.hasChunkAt(center)) {
+            return false;
+        }
+        for (Direction direction : Direction.values()) {
+            if (!level.hasChunkAt(center.relative(direction))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private Direction expeditionDirection() {
@@ -4778,15 +5648,81 @@ public class LocalBehaviorController {
     }
 
     private Optional<BlockPos> findNearestMineableSource(ServerLevel level, int radius, Block... sourceBlocks) {
-        return this.findNearestBlock(level, radius,
-                pos -> this.isVisibleMineableSource(level, pos, sourceBlocks));
+        return this.findNearestReachableBlock(level, radius, radius, radius,
+                pos -> this.isMineableSource(level, pos, sourceBlocks)
+                        && this.isExposedTargetBlock(level, pos)
+                        && !this.isRejectedResourceTarget(pos));
+    }
+
+    private void rejectResourceTarget() {
+        if (this.resourceTarget != null) {
+            this.resourceRejectedTarget = this.resourceTarget.immutable();
+            this.resourceRejectedTargetTicks = RESOURCE_TARGET_REJECT_TICKS;
+        }
+        this.resourceTarget = null;
+        this.resourceSearchCooldownTicks = 0;
+        this.resetResourceExploreMoveWatch();
+        this.interaction.cancelBreakBlock();
+    }
+
+    private boolean isRejectedResourceTarget(BlockPos pos) {
+        return this.resourceRejectedTargetTicks > 0
+                && this.resourceRejectedTarget != null
+                && this.resourceRejectedTarget.equals(pos);
+    }
+
+    private boolean refreshResourceTargetIfDue(ServerLevel level, String targetKind, Block... sourceBlocks) {
+        boolean targetKindChanged = !Objects.equals(targetKind, this.resourceTargetKind);
+        if (!targetKindChanged
+                && this.resourceTarget != null
+                && this.isVisibleMineableSource(level, this.resourceTarget, sourceBlocks)) {
+            return true;
+        }
+
+        this.resourceTarget = null;
+        this.resourceTargetKind = targetKind;
+        if (targetKindChanged) {
+            this.resourceSearchCooldownTicks = 0;
+        }
+        if (this.resourceSearchCooldownTicks > 0) {
+            return false;
+        }
+
+        this.resourceTarget = this.findNearestMineableSource(level, 18, sourceBlocks).orElse(null);
+        this.resourceSearchCooldownTicks = RESOURCE_SEARCH_INTERVAL_TICKS;
+        return this.resourceTarget != null;
     }
 
     private Optional<BlockPos> findNearestReachableLog(ServerLevel level, int radius) {
-        return this.findNearestBlock(level, radius, WOOD_SEARCH_DOWN, WOOD_SEARCH_UP,
+        return this.findNearestReachableBlock(level, radius, WOOD_SEARCH_DOWN, WOOD_SEARCH_UP,
                 pos -> isBreakableLog(level, pos)
-                        && this.isExposedTargetBlock(level, pos)
-                        && this.isReachableMiningTarget(level, pos));
+                        && this.isExposedTargetBlock(level, pos));
+    }
+
+    private Optional<BlockPos> findNearestReachableBlock(
+            ServerLevel level,
+            int horizontalRadius,
+            int down,
+            int up,
+            Predicate<BlockPos> candidatePredicate
+    ) {
+        BlockPos center = this.friend.blockPosition();
+        List<BlockPos> candidates = new ArrayList<>();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int y = -down; y <= up; y++) {
+            for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
+                for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
+                    cursor.set(center.getX() + x, center.getY() + y, center.getZ() + z);
+                    if (level.hasChunkAt(cursor) && candidatePredicate.test(cursor)) {
+                        candidates.add(cursor.immutable());
+                    }
+                }
+            }
+        }
+        candidates.sort(Comparator.comparingDouble(center::distSqr));
+        return candidates.stream()
+                .filter(pos -> this.isReachableMiningTarget(level, pos))
+                .findFirst();
     }
 
     private Optional<BlockPos> findNearestBlock(ServerLevel level, int radius, Predicate<BlockPos> predicate) {
@@ -4803,6 +5739,9 @@ public class LocalBehaviorController {
             for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
                 for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
                     cursor.set(center.getX() + x, center.getY() + y, center.getZ() + z);
+                    if (!level.hasChunkAt(cursor)) {
+                        continue;
+                    }
                     if (!predicate.test(cursor)) {
                         continue;
                     }
@@ -4818,6 +5757,9 @@ public class LocalBehaviorController {
     }
 
     private boolean isMineableSource(ServerLevel level, BlockPos pos, Block... sourceBlocks) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
         for (Block block : sourceBlocks) {
             if (level.getBlockState(pos).is(block)) {
                 return true;
@@ -4897,14 +5839,6 @@ public class LocalBehaviorController {
         };
     }
 
-    private int requiredPlanksForWorkflow() {
-        if (this.workflow == null) {
-            return 4;
-        }
-        return this.workflow.requiredAmountFor(WorkStepType.CRAFT_ITEM, WorkflowFactory.PLANKS)
-                .orElse(4);
-    }
-
     private String workflowSummary() {
         return this.workflow == null ? "none" : this.workflow.summary();
     }
@@ -4945,6 +5879,24 @@ public class LocalBehaviorController {
 
     private String furnaceStationSummary() {
         return this.furnaceStationTarget == null ? "none" : this.formatPos(this.furnaceStationTarget);
+    }
+
+    private String resourceExploreSummary() {
+        if (this.resourceExploreKind == null && this.resourceExploreBreadcrumbs.isEmpty()) {
+            return "none";
+        }
+        return "target="
+                + (this.resourceExploreKind == null ? "returning" : this.resourceExploreKind)
+                + ",dir="
+                + (this.resourceExploreDirection == null ? "none" : this.resourceExploreDirection.getName())
+                + ",dig="
+                + this.formatPos(this.resourceExploreDigTarget)
+                + ",segmentRemaining="
+                + this.resourceExploreStepsRemaining
+                + ",turns="
+                + this.resourceExploreTurns
+                + ",breadcrumbs="
+                + this.resourceExploreBreadcrumbs.size();
     }
 
     private String expeditionSummary() {
@@ -5229,6 +6181,9 @@ public class LocalBehaviorController {
             for (int z = -2; z <= 2; z++) {
                 for (int y = -1; y <= 1; y++) {
                     BlockPos candidate = target.offset(x, y, z);
+                    if (candidate.equals(target) || candidate.below().equals(target)) {
+                        continue;
+                    }
                     if (!this.canStandAt(level, candidate)) {
                         continue;
                     }
@@ -5376,7 +6331,19 @@ public class LocalBehaviorController {
             return true;
         }
         Path path = this.friend.getNavigation().createPath(candidate, 0);
-        return path != null && path.canReach();
+        return path != null && path.canReach() && this.hasReversibleVerticalSteps(path);
+    }
+
+    private boolean hasReversibleVerticalSteps(Path path) {
+        int previousY = this.friend.blockPosition().getY();
+        for (int index = 0; index < path.getNodeCount(); index++) {
+            int nextY = path.getNode(index).y;
+            if (Math.abs(nextY - previousY) > 1) {
+                return false;
+            }
+            previousY = nextY;
+        }
+        return true;
     }
 
     private boolean canStandAt(ServerLevel level, BlockPos pos) {
@@ -5984,7 +6951,7 @@ public class LocalBehaviorController {
                 continue;
             }
             double proximity = (radiusSqr - nearestDistance) / Math.max(1.0D, radiusSqr);
-            double amountScore = Math.max(1, hit.amount) * 18.0D;
+            double amountScore = this.resourceHitScoreAmount(hit) * 18.0D;
             double routeTypeScore = candidate.type().equalsIgnoreCase(hit.routeType) ? 24.0D : 0.0D;
             double directionScore = candidate.route().direction != null
                     && candidate.route().direction.equalsIgnoreCase(hit.direction)
@@ -5993,6 +6960,10 @@ public class LocalBehaviorController {
             score += 120.0D * proximity + amountScore + routeTypeScore + directionScore;
         }
         return score;
+    }
+
+    private int resourceHitScoreAmount(ExpeditionMemory.ResourceHit hit) {
+        return Math.min(EXPEDITION_RESOURCE_HIT_SCORE_AMOUNT_CAP, Math.max(1, hit == null ? 1 : hit.amount));
     }
 
     private Optional<ExpeditionMemory> findRememberedExpedition(FriendTask task, String dimension) {
@@ -6354,16 +7325,12 @@ public class LocalBehaviorController {
         });
     }
 
-    private void rememberExpeditionMiningSuccess(FriendTask task, String resourceId, int minedAmount) {
-        this.rememberExpeditionMiningSuccess(task, resourceId, minedAmount, this.friend.blockPosition());
-    }
-
-    private void rememberExpeditionMiningSuccess(FriendTask task, String resourceId, int minedAmount, BlockPos hitPos) {
+    private void rememberExpeditionMiningSuccess(FriendTask task, String resourceId, int minedTotal, int minedDelta, BlockPos hitPos) {
         BlockPos memoryPos = hitPos == null ? this.friend.blockPosition() : hitPos;
         this.updateExpeditionMemory(task, expedition -> {
             expedition.resourceId = resourceId;
             expedition.status = "target_found";
-            expedition.minedAmount = Math.max(expedition.minedAmount, minedAmount);
+            expedition.minedAmount = Math.max(expedition.minedAmount, minedTotal);
             expedition.lastKnownPosition = this.positionOf(this.friend.blockPosition());
             expedition.lastTunnelDirection = this.expeditionDirection == null ? expedition.lastTunnelDirection : this.expeditionDirection.getName();
             expedition.addRouteNote("mined " + resourceId + " at " + this.formatPos(memoryPos));
@@ -6373,9 +7340,9 @@ public class LocalBehaviorController {
                     memoryPos,
                     this.currentExpeditionRouteType(),
                     this.currentExpeditionRouteDirectionName(),
-                    minedAmount
+                    minedDelta
             ));
-            expedition.addEvent("mined " + resourceId + " count=" + minedAmount);
+            expedition.addEvent("mined " + resourceId + " amount=" + minedDelta + " total=" + minedTotal);
         });
     }
 
@@ -6632,6 +7599,12 @@ public class LocalBehaviorController {
         READY,
         WORKING,
         UNAVAILABLE
+    }
+
+    private enum ConstructionTravelResult {
+        WORKING,
+        COMPLETE,
+        FAILED
     }
 
     private record SupplySmeltTarget(

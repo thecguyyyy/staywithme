@@ -38,6 +38,9 @@ public class SurvivalWorldInteractor {
         if (!(this.friend.level() instanceof ServerLevel level)) {
             return false;
         }
+        if (pos.equals(this.friend.blockPosition().below())) {
+            return false;
+        }
         return this.canReachBlockFromEye(level, this.friend.getEyePosition(), pos);
     }
 
@@ -51,7 +54,7 @@ public class SurvivalWorldInteractor {
     }
 
     public BreakResult tickBreakBlockToInventory(ServerLevel level, BlockPos pos) {
-        if (!this.canReachBlock(pos)) {
+        if (!level.hasChunkAt(pos) || !this.canReachBlock(pos)) {
             this.clearBreakingProgress();
             return BreakResult.NOT_IN_REACH;
         }
@@ -101,7 +104,7 @@ public class SurvivalWorldInteractor {
     }
 
     public boolean placeBlockFromInventory(ServerLevel level, BlockPos pos, Block block, Predicate<ItemStack> inventoryMatcher) {
-        if (!this.canReachBlock(pos) || !this.canPlaceBlockAt(level, pos)) {
+        if (!level.hasChunkAt(pos) || !this.canReachBlock(pos) || !this.canPlaceBlockAt(level, pos)) {
             return false;
         }
         int slot = this.friend.getInventoryProvider().findFirstSlot(inventoryMatcher);
@@ -122,9 +125,13 @@ public class SurvivalWorldInteractor {
     }
 
     public boolean canPlaceBlockAt(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos) || !level.hasChunkAt(pos.below())) {
+            return false;
+        }
         BlockState state = level.getBlockState(pos);
         BlockState below = level.getBlockState(pos.below());
         return state.canBeReplaced()
+                && state.getFluidState().isEmpty()
                 && !below.isAir()
                 && below.getFluidState().isEmpty()
                 && below.isFaceSturdy(level, pos.below(), net.minecraft.core.Direction.UP);
@@ -184,6 +191,9 @@ public class SurvivalWorldInteractor {
     }
 
     private boolean canReachBlockFromEye(ServerLevel level, Vec3 eye, BlockPos pos) {
+        if (!level.hasChunkAt(pos)) {
+            return false;
+        }
         BlockState state = level.getBlockState(pos);
         if (state.canBeReplaced() && state.getCollisionShape(level, pos).isEmpty()) {
             return this.canReachOpenPositionFromEye(level, eye, Vec3.atCenterOf(pos));

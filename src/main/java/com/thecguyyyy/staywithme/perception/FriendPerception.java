@@ -35,8 +35,7 @@ public class FriendPerception {
         if (!(this.friend.level() instanceof ServerLevel level)) {
             return;
         }
-        long gameTime = level.getGameTime();
-        if (gameTime - this.lastRefreshGameTime >= REFRESH_INTERVAL_TICKS) {
+        if (this.shouldRefresh(level)) {
             this.refresh(level);
         }
     }
@@ -52,11 +51,17 @@ public class FriendPerception {
         return this.snapshot;
     }
 
+    public PerceptionSnapshot currentOrRefresh() {
+        if (this.friend.level() instanceof ServerLevel level && this.shouldRefresh(level)) {
+            this.refresh(level);
+        }
+        return this.snapshot;
+    }
+
     public Optional<BlockPos> nearestBreakableLog(int radius) {
         if (!(this.friend.level() instanceof ServerLevel level)) {
             return Optional.empty();
         }
-        this.refresh(level);
         return this.scanExposedBreakableLogs(level, radius).nearest().map(ScoredBlock::pos);
     }
 
@@ -100,6 +105,11 @@ public class FriendPerception {
                 this.friend.getInventorySummary()
         );
         this.lastRefreshGameTime = level.getGameTime();
+    }
+
+    private boolean shouldRefresh(ServerLevel level) {
+        return this.lastRefreshGameTime < 0L
+                || level.getGameTime() - this.lastRefreshGameTime >= REFRESH_INTERVAL_TICKS;
     }
 
     private LogScan scanExposedBreakableLogs(ServerLevel level, int radius) {
@@ -183,11 +193,16 @@ public class FriendPerception {
     }
 
     public static boolean canStandAt(ServerLevel level, BlockPos pos) {
+        if (!level.hasChunkAt(pos) || !level.hasChunkAt(pos.above()) || !level.hasChunkAt(pos.below())) {
+            return false;
+        }
         BlockState feet = level.getBlockState(pos);
         BlockState head = level.getBlockState(pos.above());
         BlockState below = level.getBlockState(pos.below());
         return feet.getCollisionShape(level, pos).isEmpty()
                 && head.getCollisionShape(level, pos.above()).isEmpty()
+                && feet.getFluidState().isEmpty()
+                && head.getFluidState().isEmpty()
                 && !below.isAir()
                 && below.getFluidState().isEmpty()
                 && below.isFaceSturdy(level, pos.below(), net.minecraft.core.Direction.UP);

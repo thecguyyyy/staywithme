@@ -40,6 +40,20 @@ public class DummyEmbodiedController implements EmbodiedController {
     }
 
     @Override
+    public void moveToNearby(BlockPos pos, double speed) {
+        this.friend.getNavigation().stop();
+        this.friend.getMoveControl().setWantedPosition(
+                pos.getX() + 0.5D,
+                pos.getY(),
+                pos.getZ() + 0.5D,
+                speed
+        );
+        if (pos.getY() > this.friend.blockPosition().getY()) {
+            this.friend.getJumpControl().jump();
+        }
+    }
+
+    @Override
     public void say(String message) {
         Component component = Component.literal("<" + this.friend.getDisplayName().getString() + "> " + message);
         if (this.friend.getOwnerPlayer().isPresent()) {

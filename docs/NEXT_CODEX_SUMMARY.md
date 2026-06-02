@@ -8,12 +8,13 @@
 - Java: 17
 - Main package: `com.thecguyyyy.staywithme`
 - Current build command: `.\gradlew.bat build`
-- Last verified result: build passes on 2026-06-01 after the targeted survival mining and exposed-log perception update.
+- Last verified result: build passes on 2026-06-02 after the local construction-route recovery update.
 - Manual reload-resume checklist: `docs/RELOAD_RESUME_TESTS.md`
+- In-game API manager guide: `docs/API_CONFIG_UI.md`
 
 ## Current Direction
 
-This project is being developed as a survival-first embodied AI companion mod. The companion must act through an in-world entity body and should obey survival constraints. LLM is treated as a high-level planner, not a tick-level movement controller.
+This project is being developed as a survival-first embodied AI companion mod. The companion must act through an in-world entity body and should obey survival constraints. LLM is treated as a high-level planner and bounded stuck-route adviser, not a tick-level movement controller.
 
 Core principle:
 
@@ -25,7 +26,7 @@ player natural language / command
   -> guarded PlayerEngine/Baritone adapters stay optional for future bound-runtime use
 ```
 
-Do not make the LLM issue per-tick movement, camera, or block-breaking instructions.
+Do not make the LLM issue per-tick movement, camera, or block-breaking instructions. A bounded construction-route request is allowed after ordinary navigation fails: LLM returns adjacent relative feet positions once, then Java derives and validates any required digging or supported floor repair before execution.
 
 ## Important Existing Commands
 
@@ -53,6 +54,7 @@ Do not make the LLM issue per-tick movement, camera, or block-breaking instructi
 - `/staywithme memory export`
 - `/staywithme memory import <file>`
 - `/staywithme memory learnresource <resource> <hint>`
+- Client-side `/staywithmeconfig` or the `O` key opens the in-game API manager.
 
 ## Current Vanilla Capabilities
 
@@ -81,6 +83,11 @@ The companion can:
   - tool durability is consumed
   - mobGriefing must allow block breaking
 - Generate `MiningExpeditionPlan` through LLM or local fallback.
+- Recover from first-pass crafting-table and furnace return path failures with a bounded local construction route:
+  - capture a compressed local voxel model without exposing hidden resource identities
+  - request an optional LLM relative-feet route once when configured
+  - fall back to a local voxel A* route when LLM is disabled, unavailable, or invalid
+  - derive and validate survival-style digging, one-block supported floor repair, and one-step vertical movement locally before each action
 - Execute first-pass mining expeditions:
   - prepare required tool chain
   - prepare supply chest for from-scratch expedition chains
@@ -102,6 +109,7 @@ LLM currently does:
 - `/staywithme oreinfo <resource>` ore/resource distribution analysis.
 - `/staywithme mineplan <resource> [amount]` high-level mining expedition planning.
 - `/staywithme expedition <resource> [amount]` strategy generation before starting executable expedition workflow.
+- Bounded stuck-route advice for crafting-table and furnace return recovery. The model receives an abstract local voxel snapshot and returns adjacent relative feet positions; Java owns all block-action derivation and validation.
 
 LLM returns structured JSON only. It should not output prose that Java must parse.
 
@@ -113,6 +121,14 @@ Important classes:
 - `llm/MiningExpeditionPlanner.java`
 - `llm/MiningExpeditionPlan.java`
 - `llm/OpenAICompatibleClient.java`
+- `llm/ConstructionPathLlmPlanner.java`
+- `ai/navigation/ConstructionPathSnapshot.java`
+- `ai/navigation/ConstructionRoutePlan.java`
+- `ai/navigation/LocalConstructionPathfinder.java`
+- `client/StayWithMeLlmConfigScreen.java`
+- `network/LlmConfigRequestPacket.java`
+- `network/LlmConfigSnapshotPacket.java`
+- `network/LlmConnectionTestPacket.java`
 
 ## PlayerEngine / Player2NPC Compatibility
 
@@ -200,6 +216,17 @@ Current memory supports:
 
 Recent change:
 
+- Workflow safety checks now use a throttled perception snapshot through `currentOrRefresh()`. Manual observation still has an explicit immediate refresh, while active tasks no longer rescan the 101x101 exposed-log area every tick.
+- Reachable-log acquisition now also throttles its own 101x101 search to once every 10 ticks while far exploration movement continues each tick. The first search and the search after collecting a log remain immediate.
+- Visible mineable-resource acquisition now shares one cached target refresh path for direct mining and branch mining. Empty radius-18 searches are throttled to once every 10 ticks, duplicate branch-mining scans are removed, and a successful block break immediately re-enables scanning for the rest of an exposed vein.
+- Expedition resource-hit memory now separates per-block observed yield from cumulative inventory progress. Route-direction scoring uses the local hit delta, while expedition `minedAmount` keeps the cumulative total, preventing later hit points from receiving inflated weights.
+- Resource-hit scoring caps the contribution of one observed hit, so older save files that already contain cumulative-style hit amounts cannot let a single legacy point dominate route selection forever.
+- Reachable resource and log discovery now use two-stage selection: collect loaded/exposed candidates with cheap block checks, sort by distance, then run navigation reachability checks from nearest to farthest until one succeeds. Dense forests no longer trigger path creation for every exposed log in the 101x101 scan.
+- Standability, local resource searches, survival block reach/place operations, and expedition passage checks now reject unloaded chunk positions before reading or acting on them.
+- Generic standability now rejects fluid in the companion's feet or head space, and survival placement rejects fluid-filled destination blocks. Navigation, remembered-route reuse, and block placement no longer treat underwater or lava-filled spaces as ordinary safe positions.
+- Local staircase and branch-tunnel movement now reuse the expedition movement-stall watchdog. A stalled open passage or stalled dig-approach position records a route note and rotates to another direction; a blocker with no safe dig stand position also rotates immediately instead of repeatedly moving toward the companion's current position.
+- Expedition staircase, branch tunnel, fluid-hazard, fluid-leak, and floor-repair checks treat unknown neighboring chunks conservatively as unsafe and rotate away instead of probing or digging into unloaded terrain.
+- Unknown neighboring chunks are tracked separately from actual fluid hazards. They block passage expansion conservatively but no longer trigger false lava retreats or write fake lava hazard memory.
 - `FriendPerception` and LLM `WorldSnapshot` now report only loaded, exposed breakable logs. Buried logs are no longer counted or surfaced as nearby observations.
 - Exposed-log perception now scans the 101x101 search area once per refresh for both nearest-log selection and counting, instead of traversing the same block volume twice.
 - Resource exposure checks are shared between perception and local mining. A block is considered exposed only when its own chunk is loaded and it has an empty, fluid-free adjacent position in a loaded chunk.
@@ -273,6 +300,15 @@ Recent change:
 - Expedition passage digging now uses a centralized vanilla expedition risk policy. Local staircase/branch passage digging avoids falling or fragile blocks, powder snow, pointed dripstone, magma/fire/campfires, cactus/berry/wither-rose damage blocks, cobwebs, TNT/tripwire, sculk sensors/shriekers, and vanilla infested blocks instead of treating them as normal tunnel material. Hazard avoidance route notes are written into `ExpeditionMemory`.
 - Passage digging now also treats adjacent non-lava fluids as leak hazards. If a proposed tunnel block is next to water or another non-lava fluid, the expedition rotates/records a `fluid` hazard instead of opening the passage and risking a flooded tunnel stall.
 - Expedition passage movement can now repair simple one-block floor gaps with carried expendable vanilla blocks before rotating away. It only uses non-target cobblestone, cobbled deepslate, dirt, or netherrack, requires a safe sturdy support below the gap, and still refuses fluid/lava/risky-block cases.
+- Survival interaction stand-position selection no longer chooses the target block itself or a position supported by a block that is about to be mined. The interaction layer also refuses to break the companion's current floor block, preventing resource collection from digging away its own footing and dropping into a one-way hole.
+- Prepared staircase and branch-tunnel steps now use a one-block direct movement assist instead of asking global path navigation to rediscover each newly opened local transition. Upward steps request a jump, and downward staircase excavation clears the extra forward head-space needed to pass the descending corner.
+- Placement adapters now fail when no safe approach position exists instead of repeatedly walking toward the placement cell itself. Crafting-table and furnace return movement also require a safe reachable stand position and fail visibly if movement stalls, avoiding silent infinite station-return loops.
+- Crafting-table and furnace return recovery now attempts a bounded construction route before failing. It captures an abstract local voxel model, optionally asks the configured LLM for adjacent relative feet positions, and falls back to local voxel A*. Java validates each live transition and performs only survival-feasible digging, supported one-block floor repair, and one-step vertical movement. `/staywithme status` exposes the active `construction` route state.
+- The in-game API manager is now server-backed instead of relying on client-local config reads. Open it with `O` or `/staywithmeconfig`. It has separate `API` and `Advanced` tabs, OpenAI/DeepSeek/Ollama presets, masked replacement-key entry, explicit key clearing, server save feedback, and an async `Test Connection` action. The server only returns whether a key is configured, never the stored secret. Dedicated-server save/test operations require operator permission level 2.
+- API-manager save handling now distinguishes a real save acknowledgement from an initial configuration snapshot. Locally edited fields are not overwritten by a late load response, a replacement key remains visible until the server confirms persistence, and `Test Connection` is available after a key is saved even while LLM behavior is still disabled.
+- Ordinary workflow resource acquisition no longer stalls forever when no exposed reachable mineral is visible. Every registered mineral now has an exploration dimension, abundance-oriented Y range, and traversal spacing. Stone-pickaxe preparation and other non-expedition mining steps dig survival staircases toward that layer and then use a randomly rotated expanding spiral tunnel traversal. Local fallback expedition plans reuse the same mineral-specific layer profiles instead of always defaulting to diamond depth. The executor only scans newly exposed blocks and validates tools, fluids, hazards, reach, and movement stalls, so it does not gain ore x-ray information.
+- Workflow execution now performs a shared inventory check before every acquisition and crafting step. Wood preparation uses a dynamic remaining-material budget that accounts for carried planks, logs, sticks, existing tools, chests, torches, and an available crafting table instead of always gathering the workflow's original fixed log count. Ordinary mineral exploration also records bounded feet-position breadcrumbs; after gathering a buried resource, crafting-table and furnace returns backtrack the carved staircase/tunnel before falling back to normal navigation and short construction recovery.
+- Ordinary targeted mineral approach now has a short stall guard. Near approach positions use the direct one-block movement assist needed for newly carved staircase corners; if an exposed target still cannot be reached, it is temporarily rejected so scanning or tunnel exploration can continue instead of locking onto the same block forever.
 - Mining expedition safety now treats immediate adjacent lava as an active reroute trigger. If the companion is next to lava during an expedition, it records the hazard origin, returns to the supply point, interrupts the current branch/stair direction at the hazard position, clears remembered route resume state, rotates direction, and resumes instead of immediately completing the task. If the supply return point is also unsafe, it pauses. `/staywithme status` exposes `lavaReroute` and `lavaOrigin`.
 - Expedition hazard avoidance is now partly structured. `ExpeditionMemory` stores bounded hazard notes with type and position for lava/risky-block avoidance, and remembered branch route reuse invalidates or skips completed route candidates whose endpoint, side anchor, or waypoint chain is too close to a remembered hazard. Active staircase/branch digging also keeps a bounded in-task hazard cache and rotates before stepping into known danger zones. `/staywithme status` exposes `knownHazards`; `/staywithme memory` summaries include hazard counts by type.
 - Expedition memory now records bounded target resource hit points with resource id, position, route type, direction, and observed amount. Visible target blocks mined during branch mining write success memory as local mining progresses, and remembered route scoring is biased toward completed routes near prior resource hits. New branch mining can choose an initial main direction from remembered hit evidence, new side branches can choose the side direction with stronger resource-hit evidence instead of only alternating left/right, and main/staircase direction rotation can prefer the counter-clockwise alternative when prior hits clearly favor it over the default clockwise turn. `/staywithme status` exposes the remembered resource-hit count while an expedition task is active.
@@ -299,6 +335,7 @@ This is still intentionally simple. Future work should deepen active expedition 
 - Resume-after-world-reload is still first-pass, but active task, workflow index, station targets, remembered-route waypoint progress, and selected expedition executor state are restored from entity NBT. Some low-level action adapter internals are still reconstructed after reload.
 - Supply station automation can process chest-backed furnace/blast-furnace queues, can prepare a vanilla crafting table for supply pickaxe restocking, and can craft/place a regular furnace from chest cobblestone, but it still only handles vanilla machines and recipes and does not yet use modded machines.
 - No lava bridging or fluid handling beyond avoidance, the centralized vanilla risk policy, and first-pass retreat/reroute triggers.
+- Construction-route recovery is first-pass and intentionally bounded. It currently activates for crafting-table and furnace return failures, searches a local 10-block horizontal / 6-block vertical area, supports cautious digging and supported one-block floor repair, and still needs to be wired into expedition return, remembered-route replay, wood exploration, and player-follow return paths.
 - Torch spacing is simple fixed-interval placement; it now has low-torch restocking, but does not yet account for branch geometry or full torch inventory budgeting.
 - Branch mining has fixed main/side lengths, but it does not yet reason about ore-density feedback.
 - Combat remains basic.

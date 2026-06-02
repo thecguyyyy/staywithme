@@ -26,6 +26,10 @@ public interface EmbodiedController {
         this.moveTo(pos.getX() + 0.5D, pos.getY(), pos.getZ() + 0.5D, speed);
     }
 
+    default void moveToNearby(BlockPos pos, double speed) {
+        this.moveTo(pos, speed);
+    }
+
     void say(String message);
 
     boolean attack(Entity target);

@@ -80,9 +80,11 @@ public class LlmConfigUpdatePacket {
                 return;
             }
 
-            boolean allowed = player.getServer() != null && (player.getServer().isSingleplayer() || player.hasPermissions(2));
+            boolean allowed = LlmConfigSnapshotPacket.canManageConfig(player);
             if (!allowed) {
                 player.sendSystemMessage(Component.literal("StayWithMe config requires operator permission on dedicated servers."));
+                LlmConfigSnapshotPacket.send(player, false, false, false,
+                        "Operator permission is required on dedicated servers.");
                 return;
             }
 
@@ -100,6 +102,8 @@ public class LlmConfigUpdatePacket {
             StayWithMeConfig.SERVER_SPEC.save();
 
             player.sendSystemMessage(Component.literal("StayWithMe API config saved. Restart the world if an integration toggle does not affect existing companions."));
+            LlmConfigSnapshotPacket.send(player, true, true, false, true,
+                    "Saved server API configuration. Stored API key remains hidden.");
         });
         context.setPacketHandled(true);
     }

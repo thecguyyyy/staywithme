@@ -52,6 +52,12 @@ public class PlayerEngineEmbodiedController implements EmbodiedController {
     }
 
     @Override
+    public void moveToNearby(BlockPos pos, double speed) {
+        this.playerEngine.stop();
+        this.fallback.moveToNearby(pos, speed);
+    }
+
+    @Override
     public void say(String message) {
         this.fallback.say(message);
     }

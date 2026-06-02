@@ -73,6 +73,29 @@ Use these checks before treating the vanilla mining expedition path as ready for
    - Temporarily trap the companion during return or remembered-route travel.
    - After about 45 seconds without block-position progress, expect `moveWatch` to reach the limit and the expedition to pause/fallback instead of waiting forever.
 
+6. Local vertical passage:
+   - Let descent open a staircase through solid stone and inspect a downward corner.
+   - Expect enough forward head-space to be cleared before the companion enters the lower step.
+   - Let ascent reuse or open an upward staircase.
+   - Expect the companion to jump onto each prepared one-block rise instead of waiting on global navigation.
+
+7. Floor repair continuation:
+   - Create a supported one-block floor gap in the next branch-tunnel cell and provide an expendable repair block.
+   - Expect the companion to approach from a neighboring stand position, place the floor, and continue through the repaired cell.
+   - Remove all safe neighboring stand positions and expect route rotation instead of repeated walking toward the placement cell.
+
+8. Safe mining footing:
+   - Run `/staywithme stonepickaxe` near exposed floor stone and watch the cobblestone collection phase.
+   - Expect the companion to mine from a neighboring stand position rather than standing on the target stone and dropping into its own hole.
+   - If a crafting-table return has no ordinary stand path, expect bounded construction-route recovery instead of repeated `Moving to the crafting table` messages.
+
+9. Station construction-route recovery:
+   - Put the companion in a shallow hole or behind a short diggable obstruction while its workflow needs an existing crafting table or furnace.
+   - Expect `/staywithme status` to show `construction=...` while the companion plans and executes adjacent route steps.
+   - With LLM disabled or no API key configured, expect `source=local_voxel_astar`.
+   - Give the companion dirt or cobblestone and add a supported one-block floor gap; expect a repair block to be placed when needed.
+   - Add fluid, an unbreakable block, or remove all locally valid routes; expect a visible failure instead of unsafe digging or an infinite loop.
+
 ## Completion Checks
 
 - When the target amount is reached, expect the companion to return to the supply point or owner before final completion.

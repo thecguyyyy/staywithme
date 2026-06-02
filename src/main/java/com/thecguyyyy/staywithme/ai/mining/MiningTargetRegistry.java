@@ -21,6 +21,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.COBBLESTONE),
                 "wooden pickaxe or better",
                 ToolRequirement.WOODEN_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", 48, 60, 4),
                 Blocks.STONE,
                 Blocks.COBBLESTONE
         ));
@@ -30,6 +31,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.COAL),
                 "wooden pickaxe or better",
                 ToolRequirement.WOODEN_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", 32, 64, 8),
                 Blocks.COAL_ORE,
                 Blocks.DEEPSLATE_COAL_ORE
         ));
@@ -39,6 +41,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.RAW_IRON),
                 "stone pickaxe or better",
                 ToolRequirement.STONE_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", 0, 32, 10),
                 Blocks.IRON_ORE,
                 Blocks.DEEPSLATE_IRON_ORE
         ));
@@ -49,6 +52,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.DIAMOND),
                 "iron pickaxe or better",
                 ToolRequirement.IRON_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", -59, -53, 14),
                 Blocks.DIAMOND_ORE,
                 Blocks.DEEPSLATE_DIAMOND_ORE
         ));
@@ -58,6 +62,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.LAPIS_LAZULI),
                 "stone pickaxe or better",
                 ToolRequirement.STONE_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", -4, 4, 10),
                 Blocks.LAPIS_ORE,
                 Blocks.DEEPSLATE_LAPIS_ORE
         ));
@@ -68,6 +73,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.REDSTONE),
                 "iron pickaxe or better",
                 ToolRequirement.IRON_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", -59, -53, 12),
                 Blocks.REDSTONE_ORE,
                 Blocks.DEEPSLATE_REDSTONE_ORE
         ));
@@ -77,6 +83,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.RAW_GOLD),
                 "iron pickaxe or better",
                 ToolRequirement.IRON_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", -32, -16, 12),
                 Blocks.GOLD_ORE,
                 Blocks.DEEPSLATE_GOLD_ORE
         ));
@@ -87,6 +94,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.EMERALD),
                 "iron pickaxe or better",
                 ToolRequirement.IRON_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", 80, 160, 12),
                 Blocks.EMERALD_ORE,
                 Blocks.DEEPSLATE_EMERALD_ORE
         ));
@@ -96,6 +104,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.RAW_COPPER),
                 "stone pickaxe or better",
                 ToolRequirement.STONE_PICKAXE,
+                new ExplorationProfile("minecraft:overworld", 40, 56, 8),
                 Blocks.COPPER_ORE,
                 Blocks.DEEPSLATE_COPPER_ORE
         ));
@@ -106,6 +115,7 @@ public final class MiningTargetRegistry {
                 stack -> stack.is(Items.QUARTZ),
                 "wooden pickaxe or better",
                 ToolRequirement.WOODEN_PICKAXE,
+                new ExplorationProfile("minecraft:the_nether", 16, 80, 8),
                 Blocks.NETHER_QUARTZ_ORE
         ));
     }
@@ -153,7 +163,16 @@ public final class MiningTargetRegistry {
             Predicate<ItemStack> inventoryMatcher,
             String requiredToolHint,
             ToolRequirement toolRequirement,
+            ExplorationProfile explorationProfile,
             Block... sourceBlocks
+    ) {
+    }
+
+    public record ExplorationProfile(
+            String dimension,
+            int preferredYMin,
+            int preferredYMax,
+            int traversalSegmentLength
     ) {
     }
 

@@ -3,7 +3,6 @@ package com.thecguyyyy.staywithme.ai.workflow;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.function.Predicate;
 
 public class LongTaskWorkflow {
@@ -74,13 +73,9 @@ public class LongTaskWorkflow {
         return false;
     }
 
-    public OptionalInt requiredAmountFor(WorkStepType type, String target) {
-        for (WorkStep step : this.steps) {
-            if (step.type() == type && step.target().equals(target)) {
-                return OptionalInt.of(step.amount());
-            }
-        }
-        return OptionalInt.empty();
+    public List<WorkStep> pendingSteps() {
+        this.advancePastCompletedSteps();
+        return List.copyOf(this.steps.subList(this.currentIndex, this.steps.size()));
     }
 
     public String summary() {

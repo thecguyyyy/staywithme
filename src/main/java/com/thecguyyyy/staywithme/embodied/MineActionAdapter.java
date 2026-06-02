@@ -23,12 +23,26 @@ public class MineActionAdapter {
             Supplier<Optional<BlockPos>> approachTarget,
             double speed
     ) {
+        return this.mineOne(level, target, approachTarget, speed, false);
+    }
+
+    public MineResult mineOne(
+            ServerLevel level,
+            BlockPos target,
+            Supplier<Optional<BlockPos>> approachTarget,
+            double speed,
+            boolean useNearbyApproach
+    ) {
         if (!this.interaction.canReachBlock(target)) {
             Optional<BlockPos> approach = approachTarget.get();
             if (approach.isEmpty()) {
                 return MineResult.FAILED;
             }
-            this.body.moveTo(approach.get(), speed);
+            if (useNearbyApproach) {
+                this.body.moveToNearby(approach.get(), speed);
+            } else {
+                this.body.moveTo(approach.get(), speed);
+            }
             return MineResult.WORKING_FALLBACK;
         }
 

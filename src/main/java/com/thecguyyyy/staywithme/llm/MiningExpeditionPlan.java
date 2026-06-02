@@ -1,5 +1,7 @@
 package com.thecguyyyy.staywithme.llm;
 
+import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -25,11 +27,19 @@ public class MiningExpeditionPlan {
         MiningExpeditionPlan plan = new MiningExpeditionPlan();
         plan.resourceId = normalized;
         plan.amount = Math.max(1, amount);
-        plan.targetDimension = "minecraft:overworld";
-        plan.preferredYMin = -59;
-        plan.preferredYMax = -53;
+        MiningTargetRegistry.find(normalized).ifPresentOrElse(target -> {
+            MiningTargetRegistry.ExplorationProfile profile = target.explorationProfile();
+            plan.targetDimension = profile.dimension();
+            plan.preferredYMin = profile.preferredYMin();
+            plan.preferredYMax = profile.preferredYMax();
+            plan.requiredTool = target.requiredToolHint();
+        }, () -> {
+            plan.targetDimension = "minecraft:overworld";
+            plan.preferredYMin = -59;
+            plan.preferredYMax = -53;
+            plan.requiredTool = "iron pickaxe or better";
+        });
         plan.strategyMode = "BRANCH_MINE";
-        plan.requiredTool = "iron pickaxe or better";
         plan.preparation = "Ensure the companion has the required pickaxe, food/safety margin, and free inventory before mining.";
         plan.executionActions.add("PREPARE_REQUIRED_TOOL");
         plan.executionActions.add("MOVE_TO_SAFE_MINING_AREA");
