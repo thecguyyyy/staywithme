@@ -16,6 +16,7 @@ public final class WorkflowFactory {
     public static final String STONE_PICKAXE = "minecraft:stone_pickaxe";
     public static final String FURNACE = "minecraft:furnace";
     public static final String COAL = "minecraft:coal";
+    public static final String CHARCOAL = "minecraft:charcoal";
     public static final String RAW_IRON = "minecraft:raw_iron";
     public static final String IRON_INGOT = "minecraft:iron_ingot";
     public static final String IRON_PICKAXE = "minecraft:iron_pickaxe";
@@ -293,6 +294,25 @@ public final class WorkflowFactory {
                     new WorkStep(WorkStepType.CRAFT_ITEM, IRON_PICKAXE, 1)
             );
         };
+    }
+
+    public static List<WorkStep> charcoalRecovery(int amount) {
+        int charcoal = Math.max(1, amount);
+        int fuelPlanks = charcoal;
+        int fuelLogs = (fuelPlanks + 3) / 4;
+        int requiredLogs = charcoal + fuelLogs;
+        return List.of(
+                new WorkStep(WorkStepType.ACQUIRE_ITEM, LOGS, requiredLogs),
+                new WorkStep(WorkStepType.CRAFT_ITEM, PLANKS, fuelPlanks),
+                new WorkStep(WorkStepType.CRAFT_ITEM, CRAFTING_TABLE, 1),
+                new WorkStep(WorkStepType.PLACE_BLOCK, CRAFTING_TABLE, 1),
+                new WorkStep(WorkStepType.CRAFT_ITEM, STICKS, 2),
+                new WorkStep(WorkStepType.CRAFT_ITEM, WOODEN_PICKAXE, 1),
+                new WorkStep(WorkStepType.ACQUIRE_ITEM, COBBLESTONE, 8),
+                new WorkStep(WorkStepType.CRAFT_ITEM, FURNACE, 1),
+                new WorkStep(WorkStepType.PLACE_BLOCK, FURNACE, 1),
+                new WorkStep(WorkStepType.SMELT_ITEM, CHARCOAL, charcoal)
+        );
     }
 
     private static String workflowSafeTarget(String target) {

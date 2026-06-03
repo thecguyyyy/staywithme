@@ -76,6 +76,8 @@ public class LocalBehaviorController {
     private static final int RESOURCE_SEARCH_INTERVAL_TICKS = 10;
     private static final int RESOURCE_TARGET_REJECT_TICKS = 20 * 15;
     private static final int RESOURCE_TARGET_APPROACH_STALL_TICKS = 20 * 8;
+    private static final int RESOURCE_TARGET_CLUSTER_REJECT_TICKS = 20 * 20;
+    private static final int RESOURCE_TARGET_CLUSTER_REJECT_RADIUS = 6;
     private static final int WORKFLOW_TIMEOUT_TICKS = 20 * 600;
     private static final int BRANCH_MAIN_SEGMENT_LENGTH = 12;
     private static final int BRANCH_SIDE_LENGTH = 5;
@@ -102,6 +104,12 @@ public class LocalBehaviorController {
     private static final int RESOURCE_EXPLORE_MOVE_STALL_TICKS = 20 * 20;
     private static final int RESOURCE_EXPLORE_BREADCRUMB_LIMIT = 512;
     private static final int RESOURCE_EXPLORE_SURFACE_DESCENT_BLOCKS = 8;
+    private static final int RESOURCE_DETACHMENT_LLM_THRESHOLD = 3;
+    private static final int RESOURCE_DETACHMENT_STATIONARY_SIGNAL_THRESHOLD = 3;
+    private static final int RESOURCE_DETACHMENT_VERTICAL_OFFSET = 4;
+    private static final int RESOURCE_DETACHMENT_RECENT_BREADCRUMBS = 12;
+    private static final int COAL_CHARCOAL_FALLBACK_TURNS = 6;
+    private static final int COAL_CHARCOAL_FALLBACK_BREADCRUMBS = 96;
     private static final int CONSTRUCTION_MOVE_STALL_TICKS = 20 * 8;
     private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
             Direction.NORTH,
@@ -163,6 +171,12 @@ public class LocalBehaviorController {
     private int resourceSearchCooldownTicks;
     private BlockPos resourceRejectedTarget;
     private int resourceRejectedTargetTicks;
+    private String resourceRejectedClusterKind;
+    private BlockPos resourceRejectedClusterCenter;
+    private int resourceRejectedClusterTicks;
+    private String resourceApproachWatchKind;
+    private BlockPos resourceApproachWatchLastPos;
+    private int resourceApproachWatchTicks;
     private String resourceExploreKind;
     private BlockPos resourceExploreDigTarget;
     private Direction resourceExploreDirection;
@@ -175,6 +189,13 @@ public class LocalBehaviorController {
     private BlockPos resourceExploreMoveWatchLastPos;
     private int resourceExploreMoveWatchTicks;
     private List<BlockPos> resourceExploreBreadcrumbs = new ArrayList<>();
+    private int resourceDetachmentCount;
+    private int resourceDetachmentStationarySignals;
+    private BlockPos resourceDetachmentLastSignalPos;
+    private BlockPos resourceDetachmentTarget;
+    private String resourceDetachmentSource = "none";
+    private String resourceDetachmentStatus = "idle";
+    private boolean resourceDetachmentLocalAttempted;
     private BlockPos expeditionDigTarget;
     private Direction expeditionDirection;
     private BlockPos expeditionSupplyPoint;
@@ -270,6 +291,10 @@ public class LocalBehaviorController {
         this.resourceSearchCooldownTicks = 0;
         this.resourceRejectedTarget = null;
         this.resourceRejectedTargetTicks = 0;
+        this.resourceRejectedClusterKind = null;
+        this.resourceRejectedClusterCenter = null;
+        this.resourceRejectedClusterTicks = 0;
+        this.resetResourceApproachWatch();
         this.resetResourceExplore();
         this.expeditionDigTarget = null;
         this.expeditionDirection = null;
@@ -372,6 +397,13 @@ public class LocalBehaviorController {
                 this.resourceRejectedTarget = null;
             }
         }
+        if (this.resourceRejectedClusterTicks > 0) {
+            this.resourceRejectedClusterTicks--;
+            if (this.resourceRejectedClusterTicks <= 0) {
+                this.resourceRejectedClusterKind = null;
+                this.resourceRejectedClusterCenter = null;
+            }
+        }
 
         switch (task.type()) {
             case FOLLOW_PLAYER -> this.followPlayer(task);
@@ -402,6 +434,10 @@ public class LocalBehaviorController {
         this.resourceSearchCooldownTicks = 0;
         this.resourceRejectedTarget = null;
         this.resourceRejectedTargetTicks = 0;
+        this.resourceRejectedClusterKind = null;
+        this.resourceRejectedClusterCenter = null;
+        this.resourceRejectedClusterTicks = 0;
+        this.resetResourceApproachWatch();
         this.resetResourceExplore();
         this.expeditionDigTarget = null;
         this.expeditionDirection = null;
@@ -1643,6 +1679,9 @@ public class LocalBehaviorController {
                 this.sayThrottled("I need " + target.requiredToolHint() + " before mining " + target.displayName() + ".");
                 return false;
             }
+            if (WorkflowFactory.COAL.equals(target.resourceId()) && this.scheduleCharcoalRecoveryIfCoalExplorationStalled(step)) {
+                return true;
+            }
             return this.executeAcquireMineableResourceStep(
                     serverLevel,
                     step,
@@ -1664,7 +1703,7 @@ public class LocalBehaviorController {
             return this.executeAcquireMineableResourceStep(
                     serverLevel,
                     step,
-                    stack -> stack.is(Items.COAL),
+                    this::isCoalEquivalent,
                     "coal",
                     VANILLA_COAL_ORES
             );
@@ -1733,6 +1772,9 @@ public class LocalBehaviorController {
         if (WorkflowFactory.WOODEN_PICKAXE.equals(step.target())) {
             return this.executeWoodenPickaxeCraftStep(serverLevel, step);
         }
+        if (WorkflowFactory.FURNACE.equals(step.target())) {
+            return this.executeFurnaceCraftStep(serverLevel, step);
+        }
         return this.executeDynamicCraftStep(serverLevel, step);
     }
 
@@ -1752,6 +1794,9 @@ public class LocalBehaviorController {
     private boolean executeSmeltItemStep(ServerLevel serverLevel, WorkStep step) {
         if (WorkflowFactory.IRON_INGOT.equals(step.target())) {
             return this.executeIronIngotSmeltStep(serverLevel, step);
+        }
+        if (WorkflowFactory.CHARCOAL.equals(step.target())) {
+            return this.executeCharcoalSmeltStep(serverLevel, step);
         }
         return this.failUnsupportedWorkflowStep(step);
     }
@@ -1866,7 +1911,8 @@ public class LocalBehaviorController {
 
     private boolean executeAcquireLogStep(ServerLevel serverLevel, WorkStep step) {
         int requiredPlanks = this.requiredPlanksForPendingWorkflow(serverLevel);
-        if (this.workflowOutputSatisfied() || this.availablePlankEquivalent() >= requiredPlanks) {
+        int requiredLogs = this.requiredLogsForPendingWorkflow();
+        if (this.workflowOutputSatisfied() || this.hasWoodForPendingWorkflow(requiredLogs, requiredPlanks)) {
             this.workflow.completeCurrent("already have materials");
             return true;
         }
@@ -1877,14 +1923,155 @@ public class LocalBehaviorController {
             return false;
         }
 
+        if (this.returnToWoodGatheringSurfaceIfNeeded(serverLevel, step)) {
+            return false;
+        }
+
         step.running("collecting log");
         if (this.collectOneLogIntoInventory(serverLevel)) {
-            if (this.availablePlankEquivalent() >= requiredPlanks) {
+            if (this.hasWoodForPendingWorkflow(requiredLogs, requiredPlanks)) {
                 this.workflow.completeCurrent("log collected");
             }
             return true;
         }
         return false;
+    }
+
+    private boolean returnToWoodGatheringSurfaceIfNeeded(ServerLevel level, WorkStep step) {
+        if (!this.shouldReturnToSurfaceBeforeWoodSearch(level)) {
+            return false;
+        }
+
+        if (!this.resourceExploreBreadcrumbs.isEmpty()) {
+            this.resetWoodExploreTarget();
+            if (this.moveBackAlongResourceExplorePath(step, "surface wood gathering area")) {
+                return true;
+            }
+        }
+
+        Optional<BlockPos> surfaceTarget = this.findWoodGatheringSurfaceTarget(level);
+        if (surfaceTarget.isEmpty()) {
+            step.running("looking for surface route before wood gathering");
+            this.sayThrottled("I need logs for charcoal, but I am still underground and cannot find a safe surface route yet.");
+            return true;
+        }
+
+        BlockPos target = surfaceTarget.get();
+        if (this.friend.blockPosition().distSqr(target) <= 4.0D
+                && this.isSurfaceWoodGatheringPosition(level, this.friend.blockPosition())) {
+            this.resetResourceExploreMoveWatch();
+            this.resetWoodExploreTarget();
+            return false;
+        }
+
+        if (this.isResourceExploreMoveStalled(target)) {
+            this.body.stop();
+            this.resetResourceExploreMoveWatch();
+            step.running("surface return stalled");
+            this.sayThrottled("The route back to the surface for wood gathering stalled, so I am looking for another safe surface route.");
+            return true;
+        }
+
+        step.running("returning to surface for wood gathering");
+        this.resetWoodExploreTarget();
+        this.sayThrottled("Returning to the surface before looking for logs for charcoal.");
+        if (this.friend.blockPosition().distSqr(target) <= 4.0D) {
+            this.body.moveToNearby(target, TASK_SPEED);
+        } else {
+            this.body.moveTo(target, TASK_SPEED);
+        }
+        return true;
+    }
+
+    private boolean shouldReturnToSurfaceBeforeWoodSearch(ServerLevel level) {
+        return !this.resourceExploreBreadcrumbs.isEmpty()
+                || this.isBelowWoodGatheringSurface(level, this.friend.blockPosition());
+    }
+
+    private Optional<BlockPos> findWoodGatheringSurfaceTarget(ServerLevel level) {
+        Optional<BlockPos> craftingTarget = this.findSurfaceStandNearKnownStation(
+                level,
+                this.craftingStationTarget,
+                pos -> this.isCraftingTableAt(level, pos)
+        );
+        if (craftingTarget.isPresent()) {
+            return craftingTarget;
+        }
+
+        Optional<BlockPos> furnaceTarget = this.findSurfaceStandNearKnownStation(
+                level,
+                this.furnaceStationTarget,
+                pos -> this.isFurnaceAt(level, pos)
+        );
+        if (furnaceTarget.isPresent()) {
+            return furnaceTarget;
+        }
+
+        FriendTask task = this.friend.getCurrentTask();
+        Optional<ServerPlayer> owner = this.findTaskPlayer(task)
+                .filter(player -> player.level() == level)
+                .filter(player -> this.canStandAt(level, player.blockPosition()))
+                .filter(player -> this.isSurfaceWoodGatheringPosition(level, player.blockPosition()))
+                .filter(player -> this.canNavigateToStandPosition(player.blockPosition()));
+        if (owner.isPresent()) {
+            return Optional.of(owner.get().blockPosition().immutable());
+        }
+
+        return this.findReachableSurfaceWoodWaypoint(level, 24);
+    }
+
+    private Optional<BlockPos> findSurfaceStandNearKnownStation(
+            ServerLevel level,
+            BlockPos station,
+            Predicate<BlockPos> stationPredicate
+    ) {
+        if (station == null || !level.hasChunkAt(station) || !stationPredicate.test(station)) {
+            return Optional.empty();
+        }
+        return this.findStandPositionNearBlock(level, station)
+                .filter(pos -> this.isSurfaceWoodGatheringPosition(level, pos));
+    }
+
+    private Optional<BlockPos> findReachableSurfaceWoodWaypoint(ServerLevel level, int radius) {
+        BlockPos center = this.friend.blockPosition();
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (int x = -radius; x <= radius; x++) {
+            for (int z = -radius; z <= radius; z++) {
+                int targetX = center.getX() + x;
+                int targetZ = center.getZ() + z;
+                int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, targetX, targetZ);
+                BlockPos candidate = new BlockPos(targetX, surfaceY, targetZ);
+                if (!level.hasChunkAt(candidate)
+                        || !this.canStandAt(level, candidate)
+                        || !this.isSurfaceWoodGatheringPosition(level, candidate)
+                        || !this.canNavigateToStandPosition(candidate)) {
+                    continue;
+                }
+                double distance = center.distSqr(candidate);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = candidate.immutable();
+                }
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private boolean isBelowWoodGatheringSurface(ServerLevel level, BlockPos pos) {
+        if (pos == null || !level.hasChunkAt(pos)) {
+            return false;
+        }
+        int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, pos.getX(), pos.getZ());
+        return pos.getY() < surfaceY - 2 && !level.canSeeSky(pos.above());
+    }
+
+    private boolean isSurfaceWoodGatheringPosition(ServerLevel level, BlockPos pos) {
+        if (pos == null || !level.hasChunkAt(pos)) {
+            return false;
+        }
+        int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, pos.getX(), pos.getZ());
+        return pos.getY() >= surfaceY - 2 || level.canSeeSky(pos.above());
     }
 
     private boolean executeCraftPlanksStep(ServerLevel serverLevel, WorkStep step) {
@@ -1893,7 +2080,8 @@ public class LocalBehaviorController {
             this.workflow.completeCurrent("already have planks");
             return true;
         }
-        if (this.countLogs() <= 0) {
+        int requiredLogs = this.requiredLogsForPendingWorkflow();
+        if (this.countLogs() <= requiredLogs) {
             step.running("waiting for logs");
             return false;
         }
@@ -1999,6 +2187,24 @@ public class LocalBehaviorController {
         );
     }
 
+    private boolean executeFurnaceCraftStep(ServerLevel serverLevel, WorkStep step) {
+        if (this.hasFurnace()) {
+            this.workflow.completeCurrent("already have furnace");
+            return true;
+        }
+        if (this.furnaceStationTarget != null && this.isFurnaceAt(serverLevel, this.furnaceStationTarget)) {
+            this.workflow.completeCurrent("furnace station already available");
+            return true;
+        }
+        Optional<BlockPos> nearbyFurnace = this.findNearbyFurnace(serverLevel, 12);
+        if (nearbyFurnace.isPresent()) {
+            this.furnaceStationTarget = nearbyFurnace.get();
+            this.workflow.completeCurrent("nearby furnace available");
+            return true;
+        }
+        return this.executeDynamicCraftStep(serverLevel, step);
+    }
+
     private boolean executeDynamicCraftStep(ServerLevel serverLevel, WorkStep step) {
         Predicate<ItemStack> matcher = this.recipeMatcherFor(step.target());
         return this.executeRecipeCraftStep(
@@ -2027,7 +2233,7 @@ public class LocalBehaviorController {
                 serverLevel,
                 this.furnaceStationTarget,
                 stack -> stack.is(Items.IRON_INGOT),
-                stack -> stack.is(Items.COAL)
+                this::isCoalEquivalent
         );
         if (result == SmeltingActionAdapter.SmeltResult.SMELTED) {
             this.say("I smelted raw iron into an iron ingot.");
@@ -2068,6 +2274,64 @@ public class LocalBehaviorController {
             return false;
         }
         step.running("waiting for smelting inputs");
+        return false;
+    }
+
+    private boolean executeCharcoalSmeltStep(ServerLevel serverLevel, WorkStep step) {
+        if (this.countCharcoal() >= step.amount()) {
+            this.workflow.completeCurrent("already have charcoal");
+            return true;
+        }
+        if (!this.ensureRegularFurnaceStation(serverLevel, step)) {
+            return false;
+        }
+
+        step.running("using furnace for charcoal");
+        SmeltingActionAdapter.SmeltResult result = this.smeltingAdapter.smeltOneAtFurnace(
+                serverLevel,
+                this.furnaceStationTarget,
+                stack -> stack.is(Items.CHARCOAL),
+                stack -> stack.is(ItemTags.PLANKS)
+        );
+        if (result == SmeltingActionAdapter.SmeltResult.SMELTED) {
+            this.say("I smelted a log into charcoal.");
+            if (this.countCharcoal() >= step.amount()) {
+                this.rememberResourceKnowledge(
+                        WorkflowFactory.COAL,
+                        "Observed fallback: when coal ore is not found quickly, smelt logs in a regular furnace using planks as fuel to produce charcoal.",
+                        "observed_charcoal_fallback"
+                );
+                this.workflow.completeCurrent("smelted charcoal");
+            }
+            return true;
+        }
+        if (result == SmeltingActionAdapter.SmeltResult.WORKING) {
+            step.running("waiting for charcoal furnace");
+            return false;
+        }
+        if (result == SmeltingActionAdapter.SmeltResult.MISSING_STATION) {
+            step.running("waiting for regular furnace");
+            return false;
+        }
+        if (result == SmeltingActionAdapter.SmeltResult.MISSING_INPUT) {
+            step.running("waiting for logs");
+            return false;
+        }
+        if (result == SmeltingActionAdapter.SmeltResult.MISSING_FUEL) {
+            step.running("waiting for planks");
+            return false;
+        }
+        if (result == SmeltingActionAdapter.SmeltResult.INVENTORY_FULL) {
+            step.failed("inventory full");
+            this.friend.getFriendBrain().failTask("I made charcoal, but my inventory is full.");
+            return false;
+        }
+        if (result == SmeltingActionAdapter.SmeltResult.STATION_BLOCKED) {
+            step.failed("furnace blocked");
+            this.friend.getFriendBrain().failTask("The furnace is occupied by another item, so I cannot make charcoal there.");
+            return false;
+        }
+        step.running("waiting for charcoal smelting inputs");
         return false;
     }
 
@@ -2424,10 +2688,15 @@ public class LocalBehaviorController {
                     && this.isExpeditionMoveStalled(approachTarget.get(), "approach " + displayName);
             boolean ordinaryApproachStalled = (this.friend.getCurrentTask() == null
                     || this.friend.getCurrentTask().type() != FriendTaskType.MINING_EXPEDITION)
-                    && this.isResourceExploreMoveStalled(approachTarget.get(), RESOURCE_TARGET_APPROACH_STALL_TICKS);
+                    && (this.isResourceExploreMoveStalled(approachTarget.get(), RESOURCE_TARGET_APPROACH_STALL_TICKS)
+                    || this.isOrdinaryResourceApproachClusterStalled(step.target()));
             if (expeditionApproachStalled || ordinaryApproachStalled) {
                 this.body.stop();
-                this.rejectResourceTarget();
+                if (ordinaryApproachStalled) {
+                    this.rejectResourceTargetCluster(step.target());
+                } else {
+                    this.rejectResourceTarget();
+                }
                 step.running("approach to " + displayName + " stalled");
                 if (expeditionApproachStalled) {
                     this.setExpeditionSupplyStatus("searching: approach stalled");
@@ -2439,6 +2708,7 @@ public class LocalBehaviorController {
             this.sayThrottled("Moving to " + displayName + " at " + this.formatPos(this.resourceTarget) + " (" + Math.round(distance) + " blocks away).");
         } else {
             this.resetExpeditionMoveWatch();
+            this.resetResourceApproachWatch();
             step.running("mining " + displayName);
         }
 
@@ -2501,6 +2771,34 @@ public class LocalBehaviorController {
         return true;
     }
 
+    private boolean scheduleCharcoalRecoveryIfCoalExplorationStalled(WorkStep step) {
+        if (this.workflow == null
+                || step == null
+                || !WorkflowFactory.COAL.equals(step.target())
+                || this.countCoalEquivalent() >= step.amount()
+                || this.hasPendingCharcoalRecoveryStep()) {
+            return false;
+        }
+        if (!WorkflowFactory.COAL.equals(this.resourceExploreKind)
+                || (this.resourceExploreTurns < COAL_CHARCOAL_FALLBACK_TURNS
+                && this.resourceExploreBreadcrumbs.size() < COAL_CHARCOAL_FALLBACK_BREADCRUMBS)) {
+            return false;
+        }
+        int missing = Math.max(1, step.amount() - this.countCoalEquivalent());
+        if (!this.workflow.insertBeforeCurrent(WorkflowFactory.charcoalRecovery(missing))) {
+            return false;
+        }
+        this.finishResourceExplore();
+        this.body.stop();
+        this.say("I have searched for coal for too long. I am switching to charcoal by smelting logs with planks.");
+        return true;
+    }
+
+    private boolean hasPendingCharcoalRecoveryStep() {
+        return this.workflow != null && this.workflow.hasPendingStep(step ->
+                step.type() == WorkStepType.SMELT_ITEM && WorkflowFactory.CHARCOAL.equals(step.target()));
+    }
+
     private boolean exploreForMineableResource(
             ServerLevel level,
             WorkStep step,
@@ -2527,15 +2825,33 @@ public class LocalBehaviorController {
         }
 
         this.ensureResourceExploreState(level, step.target(), profile);
-        this.updateResourceExploreTraversalProgress();
         BlockPos current = this.friend.blockPosition();
+        if (this.resourceDetachmentTarget != null) {
+            if (this.tryReturnToMiningRoute(level, step, "active mining-route recovery")
+                    || this.resourceDetachmentTarget != null) {
+                return false;
+            }
+        }
+        this.updateResourceExploreTraversalProgress();
+        current = this.friend.blockPosition();
         if (this.isFluidDisplaced(level, current)) {
-            step.running("recovering from fluid displacement");
-            this.sayThrottled("Water displaced me from the mining route, so I am backtracking to a dry passage.");
-            if (this.moveBackAlongResourceExplorePath(step, "dry mining passage")) {
+            this.recordResourceDetachmentSignal("fluid_displacement", current);
+            if (this.tryReturnToMiningRoute(level, step, "fluid displacement")) {
                 return false;
             }
             this.rotateResourceExploreDirection();
+            step.running("recovering from fluid displacement");
+            this.sayThrottled("Water displaced me from the mining route, but I do not have a safe return route yet.");
+            return false;
+        }
+        if (this.isLargeResourceDetachmentFromTunnelAnchor(current)) {
+            this.recordResourceDetachmentSignal("vertical_anchor_offset", current);
+            if (this.tryReturnToMiningRoute(level, step, "vertical offset from mining tunnel anchor")) {
+                return false;
+            }
+            this.rotateResourceExploreDirection();
+            step.running("recovering from vertical mining-route offset");
+            this.sayThrottled("I seem to have left the mining tunnel height, so I am trying to recover the route.");
             return false;
         }
         this.lowerResourceExploreAnchorIfStillSurface(level, current);
@@ -2555,6 +2871,10 @@ public class LocalBehaviorController {
 
         if (!this.canUsePassageFoot(level, nextFeet)) {
             if (this.tryRepairPassageFloor(level, step, nextFeet, label)) {
+                return false;
+            }
+            if (this.shouldAttemptResourceDetachmentRecovery("unsafe_direction_rotation", current, false)
+                    && this.tryReturnToMiningRoute(level, step, "repeated unsafe direction rotation")) {
                 return false;
             }
             this.rotateResourceExploreDirection();
@@ -2603,6 +2923,10 @@ public class LocalBehaviorController {
             this.resourceExploreDigTarget = null;
             if (this.isResourceExploreMoveStalled(nextFeet)) {
                 this.body.stop();
+                if (this.shouldAttemptResourceDetachmentRecovery("passage_move_stall", this.friend.blockPosition(), true)
+                        && this.tryReturnToMiningRoute(level, step, "resource passage movement stalled")) {
+                    return false;
+                }
                 this.rotateResourceExploreDirection();
                 step.running("movement stalled in " + label);
                 this.sayThrottled("The resource exploration route stalled, so I am rotating toward another passage.");
@@ -2629,6 +2953,10 @@ public class LocalBehaviorController {
                 || this.hasNearbyFluidLeak(level, digTarget)
                 || this.hasFallingBlockCollapseRisk(level, digTarget)
                 || this.isRiskyExpeditionPassageBlock(state)) {
+            if (this.shouldAttemptResourceDetachmentRecovery("unsafe_dig_block", this.friend.blockPosition(), false)
+                    && this.tryReturnToMiningRoute(level, step, "repeated unsafe resource dig block")) {
+                return false;
+            }
             this.rotateResourceExploreDirection();
             step.running("avoiding unsafe block in " + label);
             return false;
@@ -2637,12 +2965,20 @@ public class LocalBehaviorController {
         if (!this.interaction.canReachBlock(digTarget)) {
             Optional<BlockPos> approach = this.findStandPositionNearBlock(level, digTarget);
             if (approach.isEmpty()) {
+                if (this.shouldAttemptResourceDetachmentRecovery("missing_dig_approach", this.friend.blockPosition(), false)
+                        && this.tryReturnToMiningRoute(level, step, "missing safe resource dig approach")) {
+                    return false;
+                }
                 this.rotateResourceExploreDirection();
                 step.running("no safe dig approach for " + label);
                 return false;
             }
             if (this.isResourceExploreMoveStalled(approach.get())) {
                 this.body.stop();
+                if (this.shouldAttemptResourceDetachmentRecovery("dig_approach_stall", this.friend.blockPosition(), true)
+                        && this.tryReturnToMiningRoute(level, step, "resource dig approach stalled")) {
+                    return false;
+                }
                 this.rotateResourceExploreDirection();
                 step.running("dig approach stalled in " + label);
                 this.sayThrottled("I could not reach that exploration dig position, so I am rotating toward another passage.");
@@ -2810,6 +3146,7 @@ public class LocalBehaviorController {
     private void resetResourceExplore() {
         this.finishResourceExplore();
         this.resourceExploreBreadcrumbs = new ArrayList<>();
+        this.resetResourceDetachmentRecovery(true);
     }
 
     private void finishResourceExplore() {
@@ -2822,6 +3159,7 @@ public class LocalBehaviorController {
         this.resourceExploreStepsRemaining = 0;
         this.resourceExploreTurns = 0;
         this.resetResourceExploreMoveWatch();
+        this.resetResourceDetachmentRecovery(true);
     }
 
     private void rememberResourceExploreBreadcrumb(BlockPos pos) {
@@ -2869,6 +3207,230 @@ public class LocalBehaviorController {
             this.body.moveTo(previous, TASK_SPEED);
         }
         return true;
+    }
+
+    private void recordResourceDetachmentSignal(String reason, BlockPos current) {
+        BlockPos signalPos = current == null ? this.friend.blockPosition().immutable() : current.immutable();
+        this.resourceDetachmentCount = Math.min(9999, this.resourceDetachmentCount + 1);
+        if (this.resourceDetachmentLastSignalPos == null || !this.resourceDetachmentLastSignalPos.equals(signalPos)) {
+            this.resourceDetachmentLastSignalPos = signalPos;
+            this.resourceDetachmentStationarySignals = 1;
+        } else {
+            this.resourceDetachmentStationarySignals++;
+        }
+        this.resourceDetachmentSource = reason == null || reason.isBlank() ? "unknown" : reason;
+        this.resourceDetachmentStatus = "detected:" + this.resourceDetachmentSource;
+    }
+
+    private boolean shouldAttemptResourceDetachmentRecovery(String reason, BlockPos current, boolean immediate) {
+        this.recordResourceDetachmentSignal(reason, current);
+        return immediate || this.resourceDetachmentStationarySignals >= RESOURCE_DETACHMENT_STATIONARY_SIGNAL_THRESHOLD;
+    }
+
+    private boolean isLargeResourceDetachmentFromTunnelAnchor(BlockPos current) {
+        if (current == null
+                || this.resourceExploreKind == null
+                || this.resourceExploreBreadcrumbs.size() < 4
+                || !this.hasReachedResourceExploreTargetLayer()) {
+            return false;
+        }
+        return Math.abs(current.getY() - this.resourceExploreTargetY) > RESOURCE_DETACHMENT_VERTICAL_OFFSET;
+    }
+
+    private boolean hasReachedResourceExploreTargetLayer() {
+        for (BlockPos breadcrumb : this.resourceExploreBreadcrumbs) {
+            if (Math.abs(breadcrumb.getY() - this.resourceExploreTargetY) <= 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean tryReturnToMiningRoute(ServerLevel level, WorkStep step, String reason) {
+        BlockPos current = this.friend.blockPosition().immutable();
+        if (this.resourceDetachmentTarget == null
+                || !this.isDryStandableResourceBreadcrumb(level, this.resourceDetachmentTarget)) {
+            BlockPos previousTarget = this.resourceDetachmentTarget;
+            this.resourceDetachmentTarget = this.latestDryStandableResourceBreadcrumb(level, current).orElse(null);
+            if (!Objects.equals(previousTarget, this.resourceDetachmentTarget)
+                    && "mining route".equals(this.constructionPathLabel)) {
+                this.resetConstructionPathRecovery();
+            }
+        }
+        if (this.resourceDetachmentTarget == null) {
+            this.resourceDetachmentSource = "none";
+            this.resourceDetachmentStatus = "blocked:no_dry_breadcrumb";
+            step.running("mining route recovery blocked");
+            return false;
+        }
+        if (current.equals(this.resourceDetachmentTarget)) {
+            this.completeResourceDetachmentReturn(this.resourceDetachmentTarget, this.resourceDetachmentSource);
+            step.running("returned to mining route");
+            return false;
+        }
+        if ("blocked:no_safe_return_route".equals(this.resourceDetachmentStatus)) {
+            step.running("mining route recovery blocked");
+            return false;
+        }
+
+        if (!this.resourceDetachmentLocalAttempted || this.resourceDetachmentCount < RESOURCE_DETACHMENT_LLM_THRESHOLD) {
+            this.resourceDetachmentLocalAttempted = true;
+            if (this.moveTowardResourceDetachmentTarget(level, step, this.resourceDetachmentTarget, reason)) {
+                this.resourceDetachmentSource = "breadcrumb";
+                this.resourceDetachmentStatus = "local_backtrack";
+                return true;
+            }
+            this.resourceDetachmentSource = "breadcrumb_failed";
+            this.resourceDetachmentStatus = "local_backtrack_blocked";
+            this.recordResourceDetachmentSignal("breadcrumb_backtrack_failure", current);
+            if (this.resourceDetachmentCount < RESOURCE_DETACHMENT_LLM_THRESHOLD) {
+                return false;
+            }
+        }
+
+        String sourceBefore = this.activeConstructionPathSource();
+        ConstructionTravelResult result = this.tickConstructionTravel(
+                level,
+                this.resourceDetachmentTarget,
+                "mining route",
+                true,
+                reason
+        );
+        String source = this.activeConstructionPathSource();
+        this.resourceDetachmentSource = "none".equals(source) ? sourceBefore : source;
+        switch (result) {
+            case WORKING -> {
+                this.resourceDetachmentStatus = "constructing_return";
+                step.running("constructing return to mining route");
+                this.sayThrottled("I am using a validated short route to return to the mining tunnel.");
+                return true;
+            }
+            case COMPLETE -> {
+                this.completeResourceDetachmentReturn(this.resourceDetachmentTarget, this.resourceDetachmentSource);
+                step.running("returned to mining route");
+                this.sayThrottled("Recovered the mining tunnel route and will continue from a safe breadcrumb.");
+                return false;
+            }
+            case FAILED -> {
+                this.resourceDetachmentStatus = "blocked:no_safe_return_route";
+                step.running("mining route recovery has no safe route");
+                this.sayThrottled("I cannot find a safe short route back to the mining tunnel yet.");
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private boolean moveTowardResourceDetachmentTarget(
+            ServerLevel level,
+            WorkStep step,
+            BlockPos target,
+            String reason
+    ) {
+        if (target == null || !this.isDryStandableResourceBreadcrumb(level, target)) {
+            return false;
+        }
+        BlockPos current = this.friend.blockPosition().immutable();
+        int horizontalDelta = Math.abs(target.getX() - current.getX()) + Math.abs(target.getZ() - current.getZ());
+        if (horizontalDelta == 1 && Math.abs(target.getY() - current.getY()) <= 1) {
+            Optional<LocalConstructionPathfinder.Transition> transition = LocalConstructionPathfinder.inspectTransition(
+                    level,
+                    current,
+                    target,
+                    0
+            );
+            if (transition.isEmpty()
+                    || transition.get().floorToPlace() != null
+                    || !transition.get().blockers().isEmpty()) {
+                return false;
+            }
+        } else if (!this.canNavigateToStandPosition(target)) {
+            return false;
+        }
+        if (this.isResourceExploreMoveStalled(target)) {
+            this.body.stop();
+            return false;
+        }
+        step.running("backtracking to mining route breadcrumb");
+        this.sayThrottled("Returning to a dry mining-route breadcrumb after "
+                + (reason == null || reason.isBlank() ? "route detachment" : reason)
+                + ".");
+        if (current.distSqr(target) <= 4.0D) {
+            this.body.moveToNearby(target, TASK_SPEED);
+        } else {
+            this.body.moveTo(target, TASK_SPEED);
+        }
+        return true;
+    }
+
+    private Optional<BlockPos> latestDryStandableResourceBreadcrumb(ServerLevel level, BlockPos current) {
+        for (int index = this.resourceExploreBreadcrumbs.size() - 1; index >= 0; index--) {
+            BlockPos breadcrumb = this.resourceExploreBreadcrumbs.get(index);
+            if (breadcrumb.equals(current) || !this.isDryStandableResourceBreadcrumb(level, breadcrumb)) {
+                continue;
+            }
+            return Optional.of(breadcrumb.immutable());
+        }
+        return Optional.empty();
+    }
+
+    private boolean isDryStandableResourceBreadcrumb(ServerLevel level, BlockPos pos) {
+        return pos != null
+                && level.hasChunkAt(pos)
+                && level.hasChunkAt(pos.above())
+                && level.hasChunkAt(pos.below())
+                && !this.isFluidDisplaced(level, pos)
+                && !this.hasNearbyFluidHazard(level, pos)
+                && this.canStandAt(level, pos);
+    }
+
+    private void completeResourceDetachmentReturn(BlockPos target, String source) {
+        if (target != null) {
+            this.pruneResourceExploreBreadcrumbsAfter(target);
+            this.resourceExploreLastStepPos = target.immutable();
+        }
+        this.resetResourceExploreMoveWatch();
+        if ("mining route".equals(this.constructionPathLabel)) {
+            this.resetConstructionPathRecovery();
+        }
+        this.resourceDetachmentCount = 0;
+        this.resourceDetachmentStationarySignals = 0;
+        this.resourceDetachmentLastSignalPos = null;
+        this.resourceDetachmentTarget = null;
+        this.resourceDetachmentLocalAttempted = false;
+        this.resourceDetachmentSource = source == null || source.isBlank() ? "unknown" : source;
+        this.resourceDetachmentStatus = "returned";
+    }
+
+    private void pruneResourceExploreBreadcrumbsAfter(BlockPos target) {
+        if (target == null) {
+            return;
+        }
+        for (int index = this.resourceExploreBreadcrumbs.size() - 1; index >= 0; index--) {
+            if (!this.resourceExploreBreadcrumbs.get(index).equals(target)) {
+                continue;
+            }
+            while (this.resourceExploreBreadcrumbs.size() > index + 1) {
+                this.resourceExploreBreadcrumbs.remove(this.resourceExploreBreadcrumbs.size() - 1);
+            }
+            return;
+        }
+    }
+
+    private void resetResourceDetachmentRecovery(boolean clearCount) {
+        if ("mining route".equals(this.constructionPathLabel)) {
+            this.resetConstructionPathRecovery();
+        }
+        this.resourceDetachmentTarget = null;
+        this.resourceDetachmentLocalAttempted = false;
+        if (!clearCount) {
+            return;
+        }
+        this.resourceDetachmentCount = 0;
+        this.resourceDetachmentStationarySignals = 0;
+        this.resourceDetachmentLastSignalPos = null;
+        this.resourceDetachmentSource = "none";
+        this.resourceDetachmentStatus = "idle";
     }
 
     private void rememberVisibleExpeditionTargetMiningSuccess(
@@ -2954,6 +3516,10 @@ public class LocalBehaviorController {
         int availableSticks = this.countSticks();
         boolean craftingTableReady = this.hasCraftingTable() || this.findNearbyCraftingTable(level, 12).isPresent();
         for (WorkStep pending : this.workflow.pendingSteps()) {
+            if (pending.type() == WorkStepType.SMELT_ITEM && WorkflowFactory.CHARCOAL.equals(pending.target())) {
+                requiredPlanks += Math.max(0, pending.amount() - this.countCharcoal());
+                continue;
+            }
             if (pending.type() != WorkStepType.CRAFT_ITEM) {
                 continue;
             }
@@ -3008,6 +3574,28 @@ public class LocalBehaviorController {
             }
         }
         return requiredPlanks;
+    }
+
+    private int requiredLogsForPendingWorkflow() {
+        if (this.workflow == null) {
+            return 0;
+        }
+        int requiredLogs = 0;
+        for (WorkStep pending : this.workflow.pendingSteps()) {
+            if (pending.type() == WorkStepType.SMELT_ITEM && WorkflowFactory.CHARCOAL.equals(pending.target())) {
+                requiredLogs += Math.max(0, pending.amount() - this.countCharcoal());
+            }
+        }
+        return requiredLogs;
+    }
+
+    private boolean hasWoodForPendingWorkflow(int requiredLogs, int requiredPlanks) {
+        int reservedLogs = Math.max(0, requiredLogs);
+        if (this.countLogs() < reservedLogs) {
+            return false;
+        }
+        int plankEquivalent = this.countPlanks() + Math.max(0, this.countLogs() - reservedLogs) * 4;
+        return plankEquivalent >= Math.max(0, requiredPlanks);
     }
 
     private static int divideRoundUp(int value, int divisor) {
@@ -3107,7 +3695,19 @@ public class LocalBehaviorController {
     }
 
     private int countCoal() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.COAL));
+        return this.countCoalEquivalent();
+    }
+
+    private int countCoalEquivalent() {
+        return this.friend.countInventoryItems(this::isCoalEquivalent);
+    }
+
+    private int countCharcoal() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.CHARCOAL));
+    }
+
+    private boolean isCoalEquivalent(ItemStack stack) {
+        return !stack.isEmpty() && (stack.is(Items.COAL) || stack.is(Items.CHARCOAL));
     }
 
     private int countRawIron() {
@@ -3186,6 +3786,9 @@ public class LocalBehaviorController {
             if (this.moveBackAlongResourceExplorePath(step, "furnace")) {
                 return false;
             }
+            if (this.scheduleLocalFurnaceStationRecovery(level, step, "old furnace is too far from the mining route")) {
+                return false;
+            }
             step.running("moving to furnace");
             this.sayThrottled("Moving to the furnace at " + this.formatPos(this.furnaceStationTarget) + ".");
             Optional<BlockPos> approach = this.findStandPositionNearBlock(level, this.furnaceStationTarget);
@@ -3198,6 +3801,85 @@ public class LocalBehaviorController {
                 this.body.stop();
                 this.resetExpeditionMoveWatch();
                 this.tickStationConstructionRecovery(level, step, this.furnaceStationTarget, "furnace");
+                return false;
+            }
+            this.resetConstructionPathRecovery();
+            this.body.moveTo(approachTarget, TASK_SPEED);
+            return false;
+        }
+        this.resetExpeditionMoveWatch();
+        this.resetConstructionPathRecovery();
+        this.resourceExploreBreadcrumbs = new ArrayList<>();
+        this.body.stop();
+        return true;
+    }
+
+    private boolean scheduleLocalFurnaceStationRecovery(ServerLevel level, WorkStep step, String reason) {
+        if (this.workflow == null
+                || step == null
+                || step.type() != WorkStepType.SMELT_ITEM
+                || !WorkflowFactory.IRON_INGOT.equals(step.target())
+                || this.hasPendingLocalFurnaceRecovery()
+                || !this.shouldPreferLocalFurnaceStation(level, this.furnaceStationTarget)) {
+            return false;
+        }
+        List<WorkStep> recovery = List.of(
+                new WorkStep(WorkStepType.ACQUIRE_ITEM, WorkflowFactory.COBBLESTONE, 8),
+                new WorkStep(WorkStepType.CRAFT_ITEM, WorkflowFactory.FURNACE, 1),
+                new WorkStep(WorkStepType.PLACE_BLOCK, WorkflowFactory.FURNACE, 1)
+        );
+        if (!this.workflow.insertBeforeCurrent(recovery)) {
+            return false;
+        }
+        this.furnaceStationTarget = null;
+        this.placeTarget = null;
+        this.resetConstructionPathRecovery();
+        this.resetResourceExploreMoveWatch();
+        this.body.stop();
+        step.running("preparing local furnace station");
+        this.say("I cannot reliably return to the old furnace from this mine route, so I am setting up a local furnace station.");
+        return true;
+    }
+
+    private boolean hasPendingLocalFurnaceRecovery() {
+        return this.workflow != null && this.workflow.hasPendingStep(step ->
+                (step.type() == WorkStepType.CRAFT_ITEM || step.type() == WorkStepType.PLACE_BLOCK)
+                        && WorkflowFactory.FURNACE.equals(step.target()));
+    }
+
+    private boolean shouldPreferLocalFurnaceStation(ServerLevel level, BlockPos station) {
+        if (station == null || !level.hasChunkAt(station)) {
+            return true;
+        }
+        BlockPos current = this.friend.blockPosition();
+        int verticalDistance = Math.abs(current.getY() - station.getY());
+        return verticalDistance > 12 || current.distSqr(station) > 24.0D * 24.0D;
+    }
+
+    private boolean ensureRegularFurnaceStation(ServerLevel level, WorkStep step) {
+        if (this.furnaceStationTarget == null || !this.isRegularFurnaceAt(level, this.furnaceStationTarget)) {
+            this.furnaceStationTarget = this.findNearbyRegularFurnace(level, 12).orElse(null);
+        }
+        if (this.furnaceStationTarget == null) {
+            step.running("waiting for regular furnace");
+            return false;
+        }
+        if (!this.interaction.canReachBlock(this.furnaceStationTarget)) {
+            if (this.moveBackAlongResourceExplorePath(step, "regular furnace")) {
+                return false;
+            }
+            step.running("moving to regular furnace");
+            this.sayThrottled("Moving to the regular furnace at " + this.formatPos(this.furnaceStationTarget) + ".");
+            Optional<BlockPos> approach = this.findStandPositionNearBlock(level, this.furnaceStationTarget);
+            if (approach.isEmpty()) {
+                this.tickStationConstructionRecovery(level, step, this.furnaceStationTarget, "regular furnace");
+                return false;
+            }
+            BlockPos approachTarget = approach.get();
+            if (this.isExpeditionMoveStalled(approachTarget, "moving to regular furnace")) {
+                this.body.stop();
+                this.resetExpeditionMoveWatch();
+                this.tickStationConstructionRecovery(level, step, this.furnaceStationTarget, "regular furnace");
                 return false;
             }
             this.resetConstructionPathRecovery();
@@ -3236,6 +3918,16 @@ public class LocalBehaviorController {
     }
 
     private ConstructionTravelResult tickConstructionTravel(ServerLevel level, BlockPos destination, String label) {
+        return this.tickConstructionTravel(level, destination, label, false, "");
+    }
+
+    private ConstructionTravelResult tickConstructionTravel(
+            ServerLevel level,
+            BlockPos destination,
+            String label,
+            boolean miningRouteReturn,
+            String recoveryReason
+    ) {
         if (destination == null) {
             this.resetConstructionPathRecovery();
             return ConstructionTravelResult.FAILED;
@@ -3260,7 +3952,14 @@ public class LocalBehaviorController {
                         this.constructionPathTarget,
                         repairBlocks
                 );
-                this.constructionPathFuture = this.constructionPathLlmPlanner.planAsync(this.friend.getUUID(), snapshot);
+                this.constructionPathFuture = miningRouteReturn
+                        ? this.constructionPathLlmPlanner.planMiningRouteReturnAsync(
+                                this.friend.getUUID(),
+                                snapshot,
+                                recoveryReason,
+                                this.recentResourceExploreBreadcrumbOffsets(this.constructionPathOrigin)
+                        )
+                        : this.constructionPathLlmPlanner.planAsync(this.friend.getUUID(), snapshot);
                 this.body.stop();
             }
             if (!this.constructionPathFuture.isDone()) {
@@ -3395,6 +4094,30 @@ public class LocalBehaviorController {
         return current.equals(this.constructionPathTarget);
     }
 
+    private List<ConstructionPathSnapshot.RelativePos> recentResourceExploreBreadcrumbOffsets(BlockPos origin) {
+        List<ConstructionPathSnapshot.RelativePos> result = new ArrayList<>();
+        if (origin == null || this.resourceExploreBreadcrumbs.isEmpty()) {
+            return result;
+        }
+        int start = Math.max(0, this.resourceExploreBreadcrumbs.size() - RESOURCE_DETACHMENT_RECENT_BREADCRUMBS);
+        for (int index = start; index < this.resourceExploreBreadcrumbs.size(); index++) {
+            result.add(ConstructionPathSnapshot.RelativePos.from(origin, this.resourceExploreBreadcrumbs.get(index)));
+        }
+        return result;
+    }
+
+    private String activeConstructionPathSource() {
+        if (this.constructionPathPlan != null) {
+            return this.constructionPathPlan.source == null || this.constructionPathPlan.source.isBlank()
+                    ? "unknown"
+                    : this.constructionPathPlan.source;
+        }
+        if (this.constructionPathFuture != null) {
+            return "waiting_llm_or_local_voxel_astar";
+        }
+        return "none";
+    }
+
     private boolean isConstructionMoveStalled(BlockPos current) {
         if (this.constructionPathLastMovePos == null || !this.constructionPathLastMovePos.equals(current)) {
             this.constructionPathLastMovePos = current;
@@ -3492,6 +4215,10 @@ public class LocalBehaviorController {
 
     private Optional<BlockPos> findNearbyFurnace(ServerLevel level, int radius) {
         return this.findNearestBlock(level, radius, pos -> this.isFurnaceAt(level, pos));
+    }
+
+    private Optional<BlockPos> findNearbyRegularFurnace(ServerLevel level, int radius) {
+        return this.findNearestBlock(level, radius, pos -> this.isRegularFurnaceAt(level, pos));
     }
 
     private boolean isFurnaceAt(ServerLevel level, BlockPos pos) {
@@ -4587,7 +5314,7 @@ public class LocalBehaviorController {
     }
 
     private boolean isTorchCraftingFuel(ItemStack stack) {
-        return stack.is(Items.COAL) || stack.is(Items.CHARCOAL);
+        return this.isCoalEquivalent(stack);
     }
 
     private boolean isSupplyFurnaceFuel(ItemStack stack) {
@@ -5834,13 +6561,13 @@ public class LocalBehaviorController {
         this.interaction.cancelBreakBlock();
     }
 
-    private Optional<BlockPos> findNearestMineableSource(ServerLevel level, int radius, Block... sourceBlocks) {
+    private Optional<BlockPos> findNearestMineableSource(ServerLevel level, String targetKind, int radius, Block... sourceBlocks) {
         return this.findNearestReachableBlock(level, radius, radius, radius,
                 pos -> this.isMineableSource(level, pos, sourceBlocks)
                         && this.isExposedTargetBlock(level, pos)
                         && this.isSafeTargetedResourceBreak(level, pos)
                         && !this.isProtectedResourceExploreStructure(pos)
-                        && !this.isRejectedResourceTarget(pos));
+                        && !this.isRejectedResourceTarget(targetKind, pos));
     }
 
     private void rejectResourceTarget() {
@@ -5851,6 +6578,21 @@ public class LocalBehaviorController {
         this.resourceTarget = null;
         this.resourceSearchCooldownTicks = 0;
         this.resetResourceExploreMoveWatch();
+        this.resetResourceApproachWatch();
+        this.interaction.cancelBreakBlock();
+    }
+
+    private void rejectResourceTargetCluster(String targetKind) {
+        BlockPos center = this.resourceTarget == null ? this.friend.blockPosition() : this.resourceTarget;
+        this.resourceRejectedTarget = this.resourceTarget == null ? null : this.resourceTarget.immutable();
+        this.resourceRejectedTargetTicks = RESOURCE_TARGET_REJECT_TICKS;
+        this.resourceRejectedClusterKind = targetKind == null || targetKind.isBlank() ? this.resourceTargetKind : targetKind;
+        this.resourceRejectedClusterCenter = center == null ? this.friend.blockPosition().immutable() : center.immutable();
+        this.resourceRejectedClusterTicks = RESOURCE_TARGET_CLUSTER_REJECT_TICKS;
+        this.resourceTarget = null;
+        this.resourceSearchCooldownTicks = 0;
+        this.resetResourceExploreMoveWatch();
+        this.resetResourceApproachWatch();
         this.interaction.cancelBreakBlock();
     }
 
@@ -5858,6 +6600,38 @@ public class LocalBehaviorController {
         return this.resourceRejectedTargetTicks > 0
                 && this.resourceRejectedTarget != null
                 && this.resourceRejectedTarget.equals(pos);
+    }
+
+    private boolean isRejectedResourceTarget(String targetKind, BlockPos pos) {
+        if (this.isRejectedResourceTarget(pos)) {
+            return true;
+        }
+        return this.resourceRejectedClusterTicks > 0
+                && this.resourceRejectedClusterCenter != null
+                && this.resourceRejectedClusterKind != null
+                && Objects.equals(targetKind, this.resourceRejectedClusterKind)
+                && pos != null
+                && pos.distSqr(this.resourceRejectedClusterCenter) <= RESOURCE_TARGET_CLUSTER_REJECT_RADIUS * RESOURCE_TARGET_CLUSTER_REJECT_RADIUS;
+    }
+
+    private boolean isOrdinaryResourceApproachClusterStalled(String targetKind) {
+        BlockPos current = this.friend.blockPosition().immutable();
+        if (!Objects.equals(this.resourceApproachWatchKind, targetKind)
+                || this.resourceApproachWatchLastPos == null
+                || !this.resourceApproachWatchLastPos.equals(current)) {
+            this.resourceApproachWatchKind = targetKind;
+            this.resourceApproachWatchLastPos = current;
+            this.resourceApproachWatchTicks = 0;
+            return false;
+        }
+        this.resourceApproachWatchTicks++;
+        return this.resourceApproachWatchTicks >= RESOURCE_TARGET_APPROACH_STALL_TICKS;
+    }
+
+    private void resetResourceApproachWatch() {
+        this.resourceApproachWatchKind = null;
+        this.resourceApproachWatchLastPos = null;
+        this.resourceApproachWatchTicks = 0;
     }
 
     private boolean refreshResourceTargetIfDue(ServerLevel level, String targetKind, Block... sourceBlocks) {
@@ -5877,7 +6651,7 @@ public class LocalBehaviorController {
             return false;
         }
 
-        this.resourceTarget = this.findNearestMineableSource(level, 18, sourceBlocks).orElse(null);
+        this.resourceTarget = this.findNearestMineableSource(level, targetKind, 18, sourceBlocks).orElse(null);
         this.resourceSearchCooldownTicks = RESOURCE_SEARCH_INTERVAL_TICKS;
         return this.resourceTarget != null;
     }
@@ -6101,7 +6875,8 @@ public class LocalBehaviorController {
             case WorkflowFactory.COBBLESTONE -> stack -> stack.is(Items.COBBLESTONE);
             case WorkflowFactory.STONE_PICKAXE -> stack -> stack.is(Items.STONE_PICKAXE);
             case WorkflowFactory.FURNACE -> stack -> stack.is(Items.FURNACE);
-            case WorkflowFactory.COAL -> stack -> stack.is(Items.COAL);
+            case WorkflowFactory.COAL -> this::isCoalEquivalent;
+            case WorkflowFactory.CHARCOAL -> stack -> stack.is(Items.CHARCOAL);
             case WorkflowFactory.RAW_IRON -> stack -> stack.is(Items.RAW_IRON);
             case WorkflowFactory.IRON_INGOT -> stack -> stack.is(Items.IRON_INGOT);
             case WorkflowFactory.IRON_PICKAXE -> stack -> stack.is(Items.IRON_PICKAXE);
@@ -6129,7 +6904,11 @@ public class LocalBehaviorController {
     }
 
     private String resourceExploreSummary() {
-        if (this.resourceExploreKind == null && this.resourceExploreBreadcrumbs.isEmpty()) {
+        if (this.resourceExploreKind == null
+                && this.resourceExploreBreadcrumbs.isEmpty()
+                && this.resourceDetachmentCount <= 0
+                && this.resourceDetachmentTarget == null
+                && "idle".equals(this.resourceDetachmentStatus)) {
             return "none";
         }
         return "target="
@@ -6145,7 +6924,21 @@ public class LocalBehaviorController {
                 + ",turns="
                 + this.resourceExploreTurns
                 + ",breadcrumbs="
-                + this.resourceExploreBreadcrumbs.size();
+                + this.resourceExploreBreadcrumbs.size()
+                + ",approachWatch="
+                + this.resourceApproachWatchTicks
+                + ",rejectCluster="
+                + this.formatPos(this.resourceRejectedClusterCenter)
+                + ":"
+                + this.resourceRejectedClusterTicks
+                + ",detachCount="
+                + this.resourceDetachmentCount
+                + ",detachSource="
+                + this.resourceDetachmentSource
+                + ",detachTarget="
+                + this.formatPos(this.resourceDetachmentTarget)
+                + ",detachStatus="
+                + this.resourceDetachmentStatus;
     }
 
     private String expeditionSummary() {
@@ -6309,6 +7102,7 @@ public class LocalBehaviorController {
 
         BlockPos best = null;
         double bestDistance = Double.MAX_VALUE;
+        boolean bestReachableNow = false;
         for (int radius = 1; radius <= 5; radius++) {
             for (int x = -radius; x <= radius; x++) {
                 for (int z = -radius; z <= radius; z++) {
@@ -6320,10 +7114,17 @@ public class LocalBehaviorController {
                         if (!this.canPlaceCraftingTableAt(level, candidate)) {
                             continue;
                         }
-                        double distance = this.friend.blockPosition().distSqr(candidate);
-                        if (distance < bestDistance) {
+                        boolean reachableNow = this.interaction.canReachBlock(candidate);
+                        if (!reachableNow && this.findStandPositionNearBlock(level, candidate).isEmpty()) {
+                            continue;
+                        }
+                        double distance = this.friend.blockPosition().distSqr(candidate)
+                                + Math.abs(this.friend.blockPosition().getY() - candidate.getY()) * 4.0D
+                                + (reachableNow ? 0.0D : 1000.0D);
+                        if ((reachableNow && !bestReachableNow) || distance < bestDistance) {
                             bestDistance = distance;
                             best = candidate.immutable();
+                            bestReachableNow = reachableNow;
                         }
                     }
                 }

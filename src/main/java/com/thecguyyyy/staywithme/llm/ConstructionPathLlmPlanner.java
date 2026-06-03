@@ -18,6 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.List;
 
 public class ConstructionPathLlmPlanner {
     private static final int SNAPSHOT_HORIZONTAL_RADIUS = 8;
@@ -28,6 +29,7 @@ public class ConstructionPathLlmPlanner {
 
             The companion is stuck because ordinary navigation has no path. Return a short sequence of adjacent feet positions.
             The server will derive and validate any required digging and floor placement. It rejects unsafe actions.
+            When asked to recover from mining-route detachment, classify the failure briefly in reason.
 
             Rules:
             - Output exactly one JSON object and nothing else.
@@ -68,6 +70,29 @@ public class ConstructionPathLlmPlanner {
     }
 
     public CompletableFuture<Optional<ConstructionRoutePlan>> planAsync(UUID companionId, ConstructionPathSnapshot snapshot) {
+        return this.planAsync(companionId, "Plan a safe local construction route to the target. Snapshot JSON:\n"
+                + JsonUtils.toJson(snapshot));
+    }
+
+    public CompletableFuture<Optional<ConstructionRoutePlan>> planMiningRouteReturnAsync(
+            UUID companionId,
+            ConstructionPathSnapshot snapshot,
+            String failureSignal,
+            List<ConstructionPathSnapshot.RelativePos> recentBreadcrumbs
+    ) {
+        JsonObject context = new JsonObject();
+        context.addProperty("failureSignal", failureSignal == null || failureSignal.isBlank() ? "unknown" : failureSignal);
+        context.add("recentBreadcrumbs", JsonUtils.GSON.toJsonTree(recentBreadcrumbs == null ? List.of() : recentBreadcrumbs));
+        context.add("snapshot", JsonUtils.GSON.toJsonTree(snapshot));
+        return this.planAsync(companionId, """
+                The companion appears detached from its expected mining staircase or tunnel.
+                Classify the failure in reason, then plan a short validated route back to the target breadcrumb.
+                Do not issue per-tick movement or hidden-block assumptions; only adjacent relative feet positions are allowed.
+                Recovery context JSON:
+                """ + JsonUtils.toJson(context));
+    }
+
+    private CompletableFuture<Optional<ConstructionRoutePlan>> planAsync(UUID companionId, String userContent) {
         if (!StayWithMeConfig.isLlmConfigured()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -89,8 +114,9 @@ public class ConstructionPathLlmPlanner {
         messages.add(system);
         JsonObject user = new JsonObject();
         user.addProperty("role", "user");
-        user.addProperty("content", "Plan a safe local construction route to the target. Snapshot JSON:\n"
-                + JsonUtils.toJson(snapshot));
+        user.addProperty("content", userContent == null || userContent.isBlank()
+                ? "Plan a safe local construction route to the target."
+                : userContent);
         messages.add(user);
         payload.add("messages", messages);
 

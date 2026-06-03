@@ -8,7 +8,7 @@
 - Java: 17
 - Main package: `com.thecguyyyy.staywithme`
 - Current build command: `.\gradlew.bat build`
-- Last verified result: build passes on 2026-06-03 after the collapse-risk and fluid-displacement recovery update.
+- Last verified result: build passes on 2026-06-03 after resource-target approach cluster stall recovery was implemented.
 - Manual reload-resume checklist: `docs/RELOAD_RESUME_TESTS.md`
 - In-game API manager guide: `docs/API_CONFIG_UI.md`
 
@@ -109,7 +109,7 @@ LLM currently does:
 - `/staywithme oreinfo <resource>` ore/resource distribution analysis.
 - `/staywithme mineplan <resource> [amount]` high-level mining expedition planning.
 - `/staywithme expedition <resource> [amount]` strategy generation before starting executable expedition workflow.
-- Bounded stuck-route advice for crafting-table and furnace return recovery. The model receives an abstract local voxel snapshot and returns adjacent relative feet positions; Java owns all block-action derivation and validation.
+- Bounded stuck-route advice for crafting-table, furnace, and mining-route detachment recovery. The model receives an abstract local voxel snapshot and returns adjacent relative feet positions; Java owns all block-action derivation and validation.
 
 LLM returns structured JSON only. It should not output prose that Java must parse.
 
@@ -314,6 +314,11 @@ Recent change:
 - Ordinary mining workflows can dynamically insert a replacement-tool subworkflow if a wooden, stone, or iron pickaxe breaks during later resource acquisition. Existing inventory checks skip already-satisfied preparation steps, and reload recovery avoids restoring a stale dynamic step index when the saved workflow shape differs from the rebuilt base workflow.
 - Ordinary resource exploration now distinguishes surface starts from underground traversal. Even when the current Y coordinate is already inside a mineral abundance band, a sky-exposed companion descends toward a lower tunnel anchor before starting horizontal traversal. Safety-triggered direction rotation no longer expands the traversal segment length; only completed movement segments do.
 - Passage digging and visible targeted mineral breaking now reject blocks that would release a falling block directly above the mined cell. This supplements direct sand/gravel rejection and adjacent-fluid checks. If ordinary mining is displaced into water, it first backtracks along recorded route breadcrumbs toward a dry passage instead of spinning through direction changes in the water.
+- Ordinary mineral exploration now has abnormal mining-route detachment recovery. It counts repeated signals such as fluid displacement, blocked breadcrumb backtracking, repeated unsafe direction rotation at the same position, movement stalls, missing dig approaches, and large vertical offsets after reaching the tunnel anchor. Recovery stays local first by moving back to the latest dry, standable breadcrumb. After repeated failures, it captures the compact construction voxel snapshot plus recent breadcrumbs, optionally asks the configured LLM to classify the detachment and suggest adjacent feet positions, then validates every dig, one-block floor repair, and movement step with the same construction route executor. If no validated route exists, it holds a visible `blocked:no_safe_return_route` state. `/staywithme status` exposes `detachCount`, `detachSource`, `detachTarget`, and `detachStatus` in `resourceExplore`.
+- Coal acquisition now has a charcoal fallback for ordinary workflows. `minecraft:coal` counts coal or charcoal for workflow satisfaction, torch crafting, and furnace fuel. If coal exploration runs for several route turns or a long breadcrumb trail without finding reachable coal ore, the controller inserts a bounded charcoal subworkflow: collect extra logs, keep enough raw logs reserved, craft planks for fuel, prepare/place a regular furnace if needed, and smelt logs into charcoal using planks. This gives iron-smelting and torch-preparation workflows a vanilla survival fallback when coal ore is not found quickly.
+- Charcoal fallback no longer starts underground wood exploration from the mine tunnel. Before collecting replacement logs, the ordinary workflow backtracks along recorded resource breadcrumbs and then moves toward a surface wood-gathering anchor, preferring the known crafting table, known furnace if it is at surface, owner position, or a reachable surface waypoint. The charcoal subworkflow also reserves enough extra logs for plank fuel and reuses an existing furnace station instead of forcing a second furnace craft.
+- Ordinary workflow station placement now filters crafting-table/furnace placement candidates through reachability or a navigable stand position and prefers positions the companion can currently reach. If raw-iron smelting cannot reliably return from a deep mining route to an old surface furnace, the workflow now inserts a local furnace-station recovery (`cobblestone -> furnace -> place furnace`) instead of failing with a long-range construction-route error.
+- Ordinary targeted resource acquisition now detects near-target approach ping-pong. If the companion keeps switching between nearby visible targets of the same resource while its own block position does not change, it rejects that small target cluster for a short cooldown and resumes tunnel exploration instead of looping on `Moving to cobblestone ...`. `/staywithme status` exposes `approachWatch` and `rejectCluster` in `resourceExplore` for this debugging path.
 - Mining expedition safety now treats immediate adjacent lava as an active reroute trigger. If the companion is next to lava during an expedition, it records the hazard origin, returns to the supply point, interrupts the current branch/stair direction at the hazard position, clears remembered route resume state, rotates direction, and resumes instead of immediately completing the task. If the supply return point is also unsafe, it pauses. `/staywithme status` exposes `lavaReroute` and `lavaOrigin`.
 - Expedition hazard avoidance is now partly structured. `ExpeditionMemory` stores bounded hazard notes with type and position for lava/risky-block avoidance, and remembered branch route reuse invalidates or skips completed route candidates whose endpoint, side anchor, or waypoint chain is too close to a remembered hazard. Active staircase/branch digging also keeps a bounded in-task hazard cache and rotates before stepping into known danger zones. `/staywithme status` exposes `knownHazards`; `/staywithme memory` summaries include hazard counts by type.
 - Expedition memory now records bounded target resource hit points with resource id, position, route type, direction, and observed amount. Visible target blocks mined during branch mining write success memory as local mining progresses, and remembered route scoring is biased toward completed routes near prior resource hits. New branch mining can choose an initial main direction from remembered hit evidence, new side branches can choose the side direction with stronger resource-hit evidence instead of only alternating left/right, and main/staircase direction rotation can prefer the counter-clockwise alternative when prior hits clearly favor it over the default clockwise turn. `/staywithme status` exposes the remembered resource-hit count while an expedition task is active.
@@ -339,14 +344,24 @@ This is still intentionally simple. Future work should deepen active expedition 
 - No full persistent route graph replay across restarts; branch routes are structured and latest-main-end reuse exists, but the companion does not yet traverse the whole graph.
 - Resume-after-world-reload is still first-pass, but active task, workflow index, station targets, remembered-route waypoint progress, and selected expedition executor state are restored from entity NBT. Some low-level action adapter internals are still reconstructed after reload.
 - Supply station automation can process chest-backed furnace/blast-furnace queues, can prepare a vanilla crafting table for supply pickaxe restocking, and can craft/place a regular furnace from chest cobblestone, but it still only handles vanilla machines and recipes and does not yet use modded machines.
-- No lava bridging or active water sealing yet. Fluid handling is limited to avoidance, collapse prediction, first-pass breadcrumb backtracking after displacement, and expedition retreat/reroute triggers.
-- Construction-route recovery is first-pass and intentionally bounded. It currently activates for crafting-table and furnace return failures, searches a local 10-block horizontal / 6-block vertical area, supports cautious digging and supported one-block floor repair, and still needs to be wired into expedition return, remembered-route replay, wood exploration, and player-follow return paths.
+- No lava bridging or active water sealing yet. Fluid handling is limited to avoidance, collapse prediction, breadcrumb/validated-route recovery after displacement, and expedition retreat/reroute triggers.
+- Construction-route recovery is first-pass and intentionally bounded. It currently activates for crafting-table, furnace, and ordinary mining-route recovery failures, searches a local 10-block horizontal / 6-block vertical area, supports cautious digging and supported one-block floor repair, and still needs to be wired into expedition return, remembered-route replay, wood exploration, and player-follow return paths.
 - Torch spacing is simple fixed-interval placement; it now has low-torch restocking, but does not yet account for branch geometry or full torch inventory budgeting.
 - Branch mining has fixed main/side lengths, but it does not yet reason about ore-density feedback.
 - Combat remains basic.
 - The companion cannot travel across dimensions by itself.
 - Modpack support is not pluginized yet.
 - PlayerEngine full controller is not deeply bound; current pathing/mining adapter is guarded and effectively disabled until valid entity binding exists.
+
+## Completed From 2026-06-04 TODO
+
+1. Abnormal tunnel-detachment detection and recovery is implemented for ordinary mineral exploration:
+   - Counts repeated fluid displacement, breadcrumb-backtrack failure, unsafe rotation without position progress, movement stall, missing dig approach, and vertical anchor offset signals.
+   - First attempts local return to the latest dry, standable breadcrumb.
+   - After repeated failure, sends compact voxel snapshot plus recent route breadcrumbs to the configured LLM for failure classification and adjacent-feet route advice.
+   - Reuses constrained construction route execution for `tryReturnToMiningRoute(...)`; Java validates all movement, digging, and supported floor repair.
+   - Falls back to local voxel A* when LLM is disabled, unavailable, or invalid, and holds a visible blocked state if no safe route exists.
+   - `/staywithme status` reports detachment count, source, target breadcrumb, and status in `resourceExplore`.
 
 ## Recommended Next Steps
 

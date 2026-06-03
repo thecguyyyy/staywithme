@@ -27,8 +27,8 @@ public final class MiningTargetRegistry {
         ));
         register(new MiningTarget(
                 "minecraft:coal",
-                "coal",
-                stack -> stack.is(Items.COAL),
+                "coal or charcoal",
+                stack -> stack.is(Items.COAL) || stack.is(Items.CHARCOAL),
                 "wooden pickaxe or better",
                 ToolRequirement.WOODEN_PICKAXE,
                 new ExplorationProfile("minecraft:overworld", 32, 64, 8),
