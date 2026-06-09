@@ -4,10 +4,13 @@ import com.thecguyyyy.staywithme.entity.FriendEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -15,6 +18,7 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Predicate;
 
 public class SurvivalWorldInteractor {
@@ -25,6 +29,7 @@ public class SurvivalWorldInteractor {
     private BlockPos breakingPos;
     private float breakingProgress;
     private int breakingTicks;
+    private ToolBreakEvent pendingToolBreakEvent;
 
     public SurvivalWorldInteractor(FriendEntity friend) {
         this.friend = friend;
@@ -32,6 +37,12 @@ public class SurvivalWorldInteractor {
 
     public void reset() {
         this.clearBreakingProgress();
+    }
+
+    public Optional<ToolBreakEvent> consumeToolBreakEvent() {
+        ToolBreakEvent event = this.pendingToolBreakEvent;
+        this.pendingToolBreakEvent = null;
+        return Optional.ofNullable(event);
     }
 
     public boolean canReachBlock(BlockPos pos) {
@@ -54,7 +65,22 @@ public class SurvivalWorldInteractor {
     }
 
     public BreakResult tickBreakBlockToInventory(ServerLevel level, BlockPos pos) {
-        if (!level.hasChunkAt(pos) || !this.canReachBlock(pos)) {
+        return this.tickBreakBlockToInventory(level, pos, false);
+    }
+
+    public BreakResult tickBreakBlockBelowToInventory(ServerLevel level, BlockPos pos) {
+        if (!this.canSafelyBreakBlockBelow(level, pos)) {
+            this.clearBreakingProgress();
+            return BreakResult.NOT_IN_REACH;
+        }
+        return this.tickBreakBlockToInventory(level, pos, true);
+    }
+
+    private BreakResult tickBreakBlockToInventory(ServerLevel level, BlockPos pos, boolean allowBlockBelow) {
+        boolean reachable = allowBlockBelow
+                ? this.canReachBlockFromEye(level, this.friend.getEyePosition(), pos)
+                : this.canReachBlock(pos);
+        if (!level.hasChunkAt(pos) || !reachable) {
             this.clearBreakingProgress();
             return BreakResult.NOT_IN_REACH;
         }
@@ -107,6 +133,46 @@ public class SurvivalWorldInteractor {
         if (!level.hasChunkAt(pos) || !this.canReachBlock(pos) || !this.canPlaceBlockAt(level, pos)) {
             return false;
         }
+        return this.finishPlaceBlockFromInventory(level, pos, block, inventoryMatcher);
+    }
+
+    public boolean placePillarBlockFromInventory(
+            ServerLevel level,
+            BlockPos pos,
+            Block block,
+            Predicate<ItemStack> inventoryMatcher
+    ) {
+        BlockPos feet = this.friend.blockPosition();
+        if (!level.hasChunkAt(pos)
+                || (!pos.equals(feet) && !pos.equals(feet.below()))
+                || this.friend.getY() < pos.getY() + 0.9D
+                || !this.canReachBlockFromEye(level, this.friend.getEyePosition(), pos)
+                || !this.canPlaceBlockAt(level, pos)) {
+            return false;
+        }
+        return this.finishPlaceBlockFromInventory(level, pos, block, inventoryMatcher);
+    }
+
+    public boolean placeBridgeBlockFromInventory(
+            ServerLevel level,
+            BlockPos pos,
+            BlockPos fromFeet,
+            Block block,
+            Predicate<ItemStack> inventoryMatcher
+    ) {
+        if (!this.canPlaceBridgeBlockAt(level, pos, fromFeet)
+                || !this.canReachBridgePlacement(level, pos, fromFeet)) {
+            return false;
+        }
+        return this.finishPlaceBlockFromInventory(level, pos, block, inventoryMatcher);
+    }
+
+    private boolean finishPlaceBlockFromInventory(
+            ServerLevel level,
+            BlockPos pos,
+            Block block,
+            Predicate<ItemStack> inventoryMatcher
+    ) {
         int slot = this.friend.getInventoryProvider().findFirstSlot(inventoryMatcher);
         if (slot < 0) {
             return false;
@@ -124,6 +190,40 @@ public class SurvivalWorldInteractor {
         return true;
     }
 
+    private boolean canSafelyBreakBlockBelow(ServerLevel level, BlockPos pos) {
+        BlockPos feet = this.friend.blockPosition();
+        if (pos == null
+                || !pos.equals(feet.below())
+                || !level.hasChunkAt(pos)
+                || !level.hasChunkAt(pos.below())
+                || !level.hasChunkAt(pos.above())) {
+            return false;
+        }
+        BlockState target = level.getBlockState(pos);
+        BlockState support = level.getBlockState(pos.below());
+        return !target.getCollisionShape(level, pos).isEmpty()
+                && !target.hasBlockEntity()
+                && target.getDestroySpeed(level, pos) >= 0.0F
+                && !(target.getBlock() instanceof FallingBlock)
+                && target.getFluidState().isEmpty()
+                && !support.isAir()
+                && support.getFluidState().isEmpty()
+                && !(support.getBlock() instanceof FallingBlock)
+                && support.isFaceSturdy(level, pos.below(), Direction.UP)
+                && !this.hasAdjacentFluid(level, pos)
+                && !this.hasAdjacentFluid(level, pos.below());
+    }
+
+    private boolean hasAdjacentFluid(ServerLevel level, BlockPos center) {
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacent = center.relative(direction);
+            if (!level.hasChunkAt(adjacent) || !level.getFluidState(adjacent).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean canPlaceBlockAt(ServerLevel level, BlockPos pos) {
         if (!level.hasChunkAt(pos) || !level.hasChunkAt(pos.below())) {
             return false;
@@ -135,6 +235,49 @@ public class SurvivalWorldInteractor {
                 && !below.isAir()
                 && below.getFluidState().isEmpty()
                 && below.isFaceSturdy(level, pos.below(), net.minecraft.core.Direction.UP);
+    }
+
+    public boolean canPlaceBridgeBlockAt(ServerLevel level, BlockPos pos, BlockPos fromFeet) {
+        if (pos == null
+                || fromFeet == null
+                || !this.friend.blockPosition().equals(fromFeet)
+                || !level.hasChunkAt(pos)
+                || !level.hasChunkAt(fromFeet.below())) {
+            return false;
+        }
+        BlockPos nextFeet = pos.above();
+        int horizontalDelta = Math.abs(nextFeet.getX() - fromFeet.getX())
+                + Math.abs(nextFeet.getZ() - fromFeet.getZ());
+        if (horizontalDelta != 1 || nextFeet.getY() != fromFeet.getY()) {
+            return false;
+        }
+
+        BlockState target = level.getBlockState(pos);
+        BlockPos supportPos = fromFeet.below();
+        BlockState support = level.getBlockState(supportPos);
+        return target.canBeReplaced()
+                && !target.hasBlockEntity()
+                && !target.getFluidState().is(FluidTags.LAVA)
+                && !support.isAir()
+                && support.getFluidState().isEmpty()
+                && !(support.getBlock() instanceof FallingBlock)
+                && support.isFaceSturdy(level, supportPos, Direction.UP);
+    }
+
+    private boolean canReachBridgePlacement(ServerLevel level, BlockPos pos, BlockPos fromFeet) {
+        BlockPos supportPos = fromFeet.below();
+        int dx = pos.getX() - supportPos.getX();
+        int dz = pos.getZ() - supportPos.getZ();
+        Direction face = Direction.fromDelta(dx, 0, dz);
+        if (face == null) {
+            return false;
+        }
+        Vec3 supportFace = Vec3.atCenterOf(supportPos).add(
+                face.getStepX() * 0.5D,
+                0.0D,
+                face.getStepZ() * 0.5D
+        );
+        return this.canHitTargetBlock(level, this.friend.getEyePosition(), supportFace, supportPos);
     }
 
     private float calculateDestroyProgress(ServerLevel level, BlockPos pos, BlockState state) {
@@ -176,7 +319,13 @@ public class SurvivalWorldInteractor {
     private void damageMainHandTool() {
         ItemStack tool = this.friend.getMainHandItem();
         if (!tool.isEmpty() && tool.isDamageableItem()) {
+            Item brokenItem = tool.getItem();
+            String brokenName = tool.getHoverName().getString();
+            int countBeforeDamage = tool.getCount();
             tool.hurtAndBreak(1, this.friend, entity -> entity.broadcastBreakEvent(InteractionHand.MAIN_HAND));
+            if (tool.isEmpty() || tool.getCount() < countBeforeDamage) {
+                this.pendingToolBreakEvent = new ToolBreakEvent(brokenItem, brokenName);
+            }
             this.friend.getFriendInventory().setChanged();
         }
     }
@@ -249,5 +398,8 @@ public class SurvivalWorldInteractor {
         WORKING,
         BROKEN,
         FAILED
+    }
+
+    public record ToolBreakEvent(Item item, String displayName) {
     }
 }

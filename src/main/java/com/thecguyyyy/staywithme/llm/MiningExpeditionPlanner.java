@@ -30,7 +30,8 @@ public class MiningExpeditionPlanner {
 
             Your job is to output a high-level, survival-safe mining expedition plan as JSON.
             You do not directly control movement, camera, block breaking, attacking, or ticks.
-            The Forge-native local controller executes deterministic survival-style actions.
+            PlayerEngine/TaskCatalogue is the preferred executor for broad resource acquisition when available.
+            The Forge-native local controller is fallback and handles StayWithMe-specific route memory, no-xray policy, and recovery behavior.
 
             Output rules:
             - Output exactly one JSON object and nothing else.
@@ -41,6 +42,7 @@ public class MiningExpeditionPlanner {
             - Include explicit safetyRules and resupplyTriggers.
             - Include resupply triggers for low health, nearly full inventory, hostile pressure, low food without carried food, low torches, and low usable pickaxe durability when applicable.
             - Prefer survival-feasible plans: prepare tools first, keep food/torches/spare tools available, avoid lava, avoid straight-down mining, keep a route home.
+            - Treat the validated Minecraft 1.20.1 distribution supplied in the user prompt as authoritative. Only choose another band when the supplied distribution explicitly describes that valid alternative and the world context supports it.
 
             JSON schema:
             {
@@ -128,37 +130,34 @@ public class MiningExpeditionPlanner {
         String normalized = resourceId.toLowerCase(Locale.ROOT);
         MiningExpeditionPlan plan = MiningExpeditionPlan.fallback(resourceId, amount, reason);
         if (normalized.contains("coal")) {
-            plan.preferredYMin = 48;
-            plan.preferredYMax = 136;
             plan.strategyMode = "CAVE_SEARCH";
             plan.requiredTool = "wooden pickaxe or better";
             plan.preparation = "Prepare a wooden pickaxe and keep inventory space for coal.";
             plan.confidence = "medium";
         } else if (normalized.contains("raw_iron") || normalized.contains("iron")) {
-            plan.preferredYMin = 0;
-            plan.preferredYMax = 80;
             plan.strategyMode = "CAVE_SEARCH";
             plan.requiredTool = "stone pickaxe or better";
             plan.preparation = "Prepare a stone pickaxe before mining iron ore.";
             plan.confidence = "medium";
         } else if (normalized.contains("diamond") || normalized.contains("redstone")) {
-            plan.preferredYMin = -59;
-            plan.preferredYMax = -53;
             plan.strategyMode = "BRANCH_MINE";
             plan.requiredTool = "iron pickaxe or better";
             plan.preparation = "Prepare an iron pickaxe before mining deep deepslate ores.";
             plan.confidence = "medium";
         } else if (normalized.contains("lapis")) {
-            plan.preferredYMin = -32;
-            plan.preferredYMax = 32;
             plan.strategyMode = "BRANCH_MINE";
             plan.requiredTool = "stone pickaxe or better";
             plan.preparation = "Prepare a stone pickaxe and mine around mid-to-low Overworld layers.";
             plan.confidence = "medium";
+        } else if (normalized.contains("gold") || normalized.contains("copper")) {
+            plan.strategyMode = "BRANCH_MINE";
+            plan.preparation = "Prepare the registered required pickaxe and mine the validated practical abundance band.";
+            plan.confidence = "medium";
+        } else if (normalized.contains("emerald")) {
+            plan.strategyMode = "SURFACE_SEARCH";
+            plan.preparation = "Search mountain terrain before mining because emerald ore does not generate in ordinary biomes.";
+            plan.confidence = "medium";
         } else if (normalized.contains("quartz")) {
-            plan.targetDimension = "minecraft:the_nether";
-            plan.preferredYMin = 10;
-            plan.preferredYMax = 118;
             plan.strategyMode = "SURFACE_SEARCH";
             plan.requiredTool = "wooden pickaxe or better";
             plan.preparation = "Only execute after the player provides Nether access; avoid lava and hostile areas.";
@@ -173,6 +172,19 @@ public class MiningExpeditionPlanner {
         String worldSnapshot = friend
                 .map(entity -> JsonUtils.toJson(WorldSnapshot.capture(player, entity)))
                 .orElse("No companion entity nearby.");
+        String validatedDistribution = MiningTargetRegistry.find(resourceId)
+                .map(target -> {
+                    MiningTargetRegistry.ExplorationProfile profile = target.explorationProfile();
+                    return "dimension="
+                            + profile.dimension()
+                            + "; practical abundance band Y="
+                            + profile.preferredYMin()
+                            + ".."
+                            + profile.preferredYMax()
+                            + "; "
+                            + profile.distributionHint();
+                })
+                .orElse("unknown or modded resource; do not invent a vanilla distribution");
         return """
                 Create a high-level mining expedition plan.
 
@@ -181,6 +193,7 @@ public class MiningExpeditionPlanner {
                 Minecraft version: 1.20.1
                 Current dimension: %s
                 Player position: %d,%d,%d
+                Validated Minecraft 1.20.1 distribution: %s
                 World snapshot JSON:
                 %s
                 Portable memory JSON:
@@ -194,6 +207,7 @@ public class MiningExpeditionPlanner {
                 player.blockPosition().getX(),
                 player.blockPosition().getY(),
                 player.blockPosition().getZ(),
+                validatedDistribution,
                 worldSnapshot,
                 JsonUtils.toJson(memory)
         );

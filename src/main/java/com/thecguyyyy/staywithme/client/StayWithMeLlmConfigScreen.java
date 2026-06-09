@@ -211,8 +211,8 @@ public class StayWithMeLlmConfigScreen extends Screen {
                 0xA0A0A0);
         if (this.advancedView) {
             graphics.drawString(this.font, "Experimental integration switches", left, 64, 0xA0A0A0);
-            graphics.drawString(this.font, "PlayerEngine bridge is guarded; Forge-native movement remains active.", left, 132, 0x808080);
-            graphics.drawString(this.font, "SmartBrainLib and direct Baritone switches are reserved for later executors.", left, 146, 0x808080);
+            graphics.drawString(this.font, "PlayerEngine is preferred for broad survival tasks when loaded.", left, 132, 0x808080);
+            graphics.drawString(this.font, "Forge-native behavior remains the fallback when PlayerEngine is unavailable.", left, 146, 0x808080);
             graphics.drawString(this.font, "Changes apply to newly spawned or reloaded companions.", left, 160, 0x808080);
         } else {
             graphics.drawString(this.font, this.apiKeyStatusText(), left, 54, this.apiKeyConfigured ? 0x80D080 : 0xD0A060);

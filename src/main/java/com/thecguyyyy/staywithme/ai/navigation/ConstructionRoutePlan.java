@@ -6,6 +6,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class ConstructionRoutePlan {
+    public static final int MAX_STEPS = 512;
+
     public String source = "unknown";
     public String reason = "";
     public List<Step> steps = new ArrayList<>();
@@ -21,8 +23,8 @@ public class ConstructionRoutePlan {
             this.steps = new ArrayList<>();
         }
         this.steps.removeIf(step -> step == null);
-        if (this.steps.size() > 64) {
-            this.steps = new ArrayList<>(this.steps.subList(0, 64));
+        if (this.steps.size() > MAX_STEPS) {
+            this.steps = new ArrayList<>(this.steps.subList(0, MAX_STEPS));
         }
     }
 

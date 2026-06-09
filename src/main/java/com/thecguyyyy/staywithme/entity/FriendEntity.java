@@ -40,6 +40,7 @@ import java.util.UUID;
 import java.util.function.Predicate;
 
 public class FriendEntity extends PathfinderMob {
+    public static final int MAX_SAFE_FALL_DISTANCE = 6;
     private static final int INVENTORY_SIZE = 36;
     private static final int RECOVERED_TASK_OWNER_REMINDER_TICKS = 20 * 60;
 
@@ -82,6 +83,11 @@ public class FriendEntity extends PathfinderMob {
         this.goalSelector.addGoal(0, new FloatGoal(this));
         this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0F));
         this.goalSelector.addGoal(9, new RandomLookAroundGoal(this));
+    }
+
+    @Override
+    public int getMaxFallDistance() {
+        return MAX_SAFE_FALL_DISTANCE;
     }
 
     @Override

@@ -34,10 +34,13 @@ public class ConstructionPathLlmPlanner {
             Rules:
             - Output exactly one JSON object and nothing else.
             - Coordinates are relative to the companion origin at 0,0,0.
-            - Each step must move exactly one horizontal block and may change y by at most one.
+            - Each step must either move exactly one horizontal block and change y from +1 down to -6, or move vertically by exactly one block.
+            - Pure vertical ascent consumes one repair block for jump-pillar placement. Pure vertical descent is accepted only as a validated one-block safe shaft.
+            - A horizontal step may fall at most 6 blocks only through completely open dry space onto a validated safe floor.
             - Use only modeled loaded cells.
-            - Prefer open movement, then small amounts of digging, then supported one-block floor repair.
-            - Never route through fluid, blocked/unbreakable cells, or long falls.
+            - Prefer open movement, then small amounts of digging, then floor placement.
+            - Horizontal floor placement may extend a bridge one block from the companion's current supported floor and consumes one repair block.
+            - Never route through fluid, blocked/unbreakable cells, or falls longer than 6 blocks.
             - Return at most 64 steps.
 
             JSON schema:
@@ -67,6 +70,14 @@ public class ConstructionPathLlmPlanner {
                 SNAPSHOT_VERTICAL_RADIUS,
                 repairBlocks
         );
+    }
+
+    public boolean canModelTarget(net.minecraft.core.BlockPos origin, net.minecraft.core.BlockPos target) {
+        return origin != null
+                && target != null
+                && Math.abs(target.getX() - origin.getX()) <= SNAPSHOT_HORIZONTAL_RADIUS
+                && Math.abs(target.getZ() - origin.getZ()) <= SNAPSHOT_HORIZONTAL_RADIUS
+                && Math.abs(target.getY() - origin.getY()) <= SNAPSHOT_VERTICAL_RADIUS;
     }
 
     public CompletableFuture<Optional<ConstructionRoutePlan>> planAsync(UUID companionId, ConstructionPathSnapshot snapshot) {

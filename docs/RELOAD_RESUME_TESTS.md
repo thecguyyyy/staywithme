@@ -20,6 +20,44 @@ Run `.\gradlew.bat build` before packaging/testing.
    - `workflow=` resumes at a later step instead of starting from step 1 when the saved step index is still valid.
    - `station=` and `furnace=` reuse valid saved stations when present.
 
+## Broad PlayerEngine Task Resume
+
+1. With PlayerEngine loaded, start `/staywithme get torches 16`, `/staywithme pickup torch 1` with a dropped torch nearby, `/staywithme buildingmaterials 32`, `/staywithme give torch 4`, `/staywithme deposit`, `/staywithme food 10`, `/staywithme meat 10`, or `/staywithme smelt raw_iron 1`.
+2. Save and quit while `/staywithme status` shows an active `GET_ITEM`, `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`, `COLLECT_MEAT`, `COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `PUT_OUT_FIRE`, `RETREAT_FROM_HOSTILES`, `RETREAT_FROM_CREEPERS`, `DODGE_PROJECTILES`, or `PROJECTILE_PROTECTION_WALL` task.
+3. Reload the world and run `/staywithme status`.
+4. Expected:
+   - `task=` shows the recovered `GET_ITEM`, `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`, `COLLECT_MEAT`, `COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `PUT_OUT_FIRE`, `RETREAT_FROM_HOSTILES`, `RETREAT_FROM_CREEPERS`, `DODGE_PROJECTILES`, or `PROJECTILE_PROTECTION_WALL` task type and original amount.
+   - PlayerEngine-first execution restarts when available.
+   - `PICKUP_DROPPED_ITEM` resumes as pickup-only work; if the dropped item despawned or is no longer reachable, it should fail visibly instead of broad-getting or crafting the item.
+   - `COLLECT_BUILDING_MATERIALS` resumes with `GetBuildingMaterialsTask` until current route-repair block inventory satisfies the saved count.
+   - `GIVE_ITEM` resumes against the saved task player name and should drop the requested item near that player once the item is obtained.
+   - `DEPOSIT_INVENTORY` resumes by recomputing current non-tool inventory targets and stores them in a valid nearby or newly placed container.
+   - `SMELT_ITEM` resumes as PlayerEngine `SmeltInFurnaceTask` for the saved output target and completes only after the output item count is present.
+   - If PlayerEngine is unavailable after reload, `GET_ITEM` falls back to any rebuildable Forge workflow, `PUT_OUT_FIRE` falls back to close-range Forge-native extinguishing, `RETREAT_FROM_CREEPERS` falls back to a reachable local retreat point, and `PROJECTILE_PROTECTION_WALL` completes only if no skeleton threat remains, while `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`/`COLLECT_MEAT`/`COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `RETREAT_FROM_HOSTILES`, and `DODGE_PROJECTILES` fail visibly unless the current state already satisfies the request.
+
+## Movement Task Resume
+
+1. With PlayerEngine loaded, start `/staywithme goto <x> <y> <z>` toward a reachable same-dimension coordinate far enough away that it will not complete immediately.
+2. Save and quit while `/staywithme status` shows `GO_TO_POSITION`.
+3. Reload the world and run `/staywithme status`.
+4. Expected:
+   - `task=` shows the recovered `GO_TO_POSITION` target formatted as `x,y,z`.
+   - PlayerEngine-first execution restarts with a `goto:x,y,z:1.5` high-level signature when available.
+   - If PlayerEngine is unavailable after reload, the Forge-native navigation fallback attempts to continue toward the coordinate instead of rejecting the saved task.
+
+## PlayerEngine-Only Task Resume
+
+1. With PlayerEngine loaded, start `/staywithme fish`, `/staywithme farm 10`, `/staywithme explore 48`, `/staywithme protect`, `/staywithme sleep` at night, or `/staywithme equiparmor iron`.
+2. Save and quit while `/staywithme status` shows `FISH`, `FARM`, `EXPLORE`, `PROTECT_PLAYER`, `SLEEP_THROUGH_NIGHT`, or `EQUIP_ARMOR`.
+3. Reload the world and run `/staywithme status`.
+4. Expected:
+   - `task=` shows the recovered PlayerEngine-only task type and target/range.
+   - `FISH`, `FARM`, and `PROTECT_PLAYER` restart as continuous PlayerEngine tasks and should be stopped explicitly.
+   - `EXPLORE` restarts with PlayerEngine when available; without PlayerEngine it should choose a reachable deterministic fallback target instead of failing immediately.
+   - `SLEEP_THROUGH_NIGHT` restarts while it is still nighttime and completes immediately if the world is already daytime after reload.
+   - `EQUIP_ARMOR` completes once the requested armor is equipped or PlayerEngine reports completion.
+   - If PlayerEngine is unavailable after reload, validation rejects the saved task with a visible PlayerEngine-required message instead of attempting a Forge-native fallback.
+
 ## Expedition Resume
 
 1. Start `/staywithme expedition minecraft:diamond 1`.

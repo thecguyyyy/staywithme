@@ -1,5 +1,6 @@
 package com.thecguyyyy.staywithme.integration;
 
+import com.thecguyyyy.staywithme.config.StayWithMeConfig;
 import net.minecraftforge.fml.ModList;
 
 import java.util.LinkedHashMap;
@@ -41,7 +42,10 @@ public final class IntegrationStatus {
                 .append(id)
                 .append(": ")
                 .append(loaded ? "loaded" : "not loaded"));
-        builder.append("\nCurrent behavior: Forge-native movement and targeted survival mining remain active. The optional PlayerEngine bridge is guarded until valid entity binding exists.");
+        builder.append("\nCurrent behavior: PlayerEngine/TaskCatalogue is preferred when loaded and enabled; Forge-native survival execution remains the fallback.");
+        builder.append("\nStayWithMe config:")
+                .append("\n- usePlayerEngineController: ")
+                .append(StayWithMeConfig.USE_PLAYERENGINE_CONTROLLER.get() ? "enabled" : "disabled");
         return builder.toString();
     }
 

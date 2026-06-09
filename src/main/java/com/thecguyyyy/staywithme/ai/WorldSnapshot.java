@@ -1,6 +1,8 @@
 package com.thecguyyyy.staywithme.ai;
 
 import com.thecguyyyy.staywithme.entity.FriendEntity;
+import com.thecguyyyy.staywithme.config.StayWithMeConfig;
+import com.thecguyyyy.staywithme.integration.IntegrationStatus;
 import com.thecguyyyy.staywithme.perception.FriendPerception;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -28,6 +30,11 @@ public class WorldSnapshot {
     public final String dimension;
     public final String inventorySummary;
     public final String npcInventorySummary;
+    public final String npcTaskSummary;
+    public final String lastFailure;
+    public final boolean playerEngineLoaded;
+    public final boolean playerEngineControllerEnabled;
+    public final String highLevelTaskEntryPoints;
 
     private WorldSnapshot(
             String playerName,
@@ -41,7 +48,12 @@ public class WorldSnapshot {
             int nearbyLogBlockCount,
             String dimension,
             String inventorySummary,
-            String npcInventorySummary
+            String npcInventorySummary,
+            String npcTaskSummary,
+            String lastFailure,
+            boolean playerEngineLoaded,
+            boolean playerEngineControllerEnabled,
+            String highLevelTaskEntryPoints
     ) {
         this.playerName = playerName;
         this.playerUuid = playerUuid;
@@ -55,6 +67,11 @@ public class WorldSnapshot {
         this.dimension = dimension;
         this.inventorySummary = inventorySummary;
         this.npcInventorySummary = npcInventorySummary;
+        this.npcTaskSummary = npcTaskSummary;
+        this.lastFailure = lastFailure;
+        this.playerEngineLoaded = playerEngineLoaded;
+        this.playerEngineControllerEnabled = playerEngineControllerEnabled;
+        this.highLevelTaskEntryPoints = highLevelTaskEntryPoints;
     }
 
     public static WorldSnapshot capture(ServerPlayer player, FriendEntity friend) {
@@ -76,7 +93,12 @@ public class WorldSnapshot {
                 logCount,
                 level.dimension().location().toString(),
                 summarizeInventory(player),
-                friend.getInventorySummary()
+                friend.getInventorySummary(),
+                trim(friend.getTaskSummary(), 240),
+                trim(friend.getFriendBrain().getLastFailureMessage(), 240),
+                IntegrationStatus.isPlayerEngineLoaded(),
+                StayWithMeConfig.USE_PLAYERENGINE_CONTROLLER.get(),
+                HighLevelTaskSurface.ENTRY_POINTS
         );
     }
 
@@ -112,5 +134,12 @@ public class WorldSnapshot {
 
     private static String formatPos(BlockPos pos) {
         return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
+    }
+
+    private static String trim(String value, int maxLength) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 }

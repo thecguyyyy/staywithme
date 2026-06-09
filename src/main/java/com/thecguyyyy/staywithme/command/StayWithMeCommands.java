@@ -8,8 +8,10 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.thecguyyyy.staywithme.ai.FriendState;
 import com.thecguyyyy.staywithme.ai.FriendTask;
 import com.thecguyyyy.staywithme.ai.FriendTaskType;
+import com.thecguyyyy.staywithme.ai.HighLevelTaskSurface;
 import com.thecguyyyy.staywithme.ai.TaskPlanner;
 import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
+import com.thecguyyyy.staywithme.config.StayWithMeConfig;
 import com.thecguyyyy.staywithme.crafting.RecipeCatalog;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
 import com.thecguyyyy.staywithme.entity.ModEntities;
@@ -19,15 +21,20 @@ import com.thecguyyyy.staywithme.llm.MiningExpeditionPlanner;
 import com.thecguyyyy.staywithme.llm.OreDistributionAnalyzer;
 import com.thecguyyyy.staywithme.memory.FriendMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
+import com.thecguyyyy.staywithme.playerengine.PlayerEngineCatalogueDiagnostics;
 import com.thecguyyyy.staywithme.util.JsonUtils;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.ResourceLocationArgument;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.RegisterCommandsEvent;
 
@@ -35,6 +42,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 public final class StayWithMeCommands {
@@ -48,6 +56,28 @@ public final class StayWithMeCommands {
                 Commands.literal("staywithme")
                         .then(Commands.literal("spawn").executes(StayWithMeCommands::spawn))
                         .then(Commands.literal("follow").executes(StayWithMeCommands::follow))
+                        .then(Commands.literal("goto")
+                                .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                        .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                        .executes(StayWithMeCommands::goToPosition)))))
+                        .then(Commands.literal("place")
+                                .then(Commands.argument("block", StringArgumentType.word())
+                                        .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                                .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                        .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                                .executes(StayWithMeCommands::placeBlock))))))
+                        .then(Commands.literal("placeblock")
+                                .then(Commands.argument("block", StringArgumentType.word())
+                                        .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                                .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                        .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                                .executes(StayWithMeCommands::placeBlock))))))
+                        .then(Commands.literal("placethrowaway")
+                                .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                        .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                        .executes(StayWithMeCommands::placeThrowawayBlock)))))
                         .then(Commands.literal("stop").executes(StayWithMeCommands::stop))
                         .then(Commands.literal("crafttable").executes(StayWithMeCommands::craftTable))
                         .then(Commands.literal("craftingtable").executes(StayWithMeCommands::craftTable))
@@ -65,6 +95,92 @@ public final class StayWithMeCommands {
                         .then(Commands.literal("iron").executes(StayWithMeCommands::ironIngot))
                         .then(Commands.literal("ironpickaxe").executes(StayWithMeCommands::ironPickaxe))
                         .then(Commands.literal("ironpick").executes(StayWithMeCommands::ironPickaxe))
+                        .then(Commands.literal("buildingmaterials")
+                                .executes(context -> buildingMaterials(context, 32))
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1, 256))
+                                        .executes(context -> buildingMaterials(context, IntegerArgumentType.getInteger(context, "count")))))
+                        .then(Commands.literal("routeblocks")
+                                .executes(context -> buildingMaterials(context, 32))
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1, 256))
+                                        .executes(context -> buildingMaterials(context, IntegerArgumentType.getInteger(context, "count")))))
+                        .then(Commands.literal("bridgeblocks")
+                                .executes(context -> buildingMaterials(context, 32))
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1, 256))
+                                        .executes(context -> buildingMaterials(context, IntegerArgumentType.getInteger(context, "count")))))
+                        .then(Commands.literal("food")
+                                .executes(context -> food(context, 10))
+                                .then(Commands.argument("units", IntegerArgumentType.integer(1, 64))
+                                        .executes(context -> food(context, IntegerArgumentType.getInteger(context, "units")))))
+                        .then(Commands.literal("meat")
+                                .executes(context -> meat(context, 10))
+                                .then(Commands.argument("units", IntegerArgumentType.integer(1, 64))
+                                        .executes(context -> meat(context, IntegerArgumentType.getInteger(context, "units")))))
+                        .then(Commands.literal("fuel")
+                                .executes(context -> fuel(context, 4))
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1, 64))
+                                        .executes(context -> fuel(context, IntegerArgumentType.getInteger(context, "count")))))
+                        .then(Commands.literal("smelt")
+                                .then(Commands.argument("target", StringArgumentType.word())
+                                        .executes(context -> smeltItem(context, 1))
+                                        .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
+                                                .executes(context -> smeltItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
+                        .then(Commands.literal("fish").executes(StayWithMeCommands::fish))
+                        .then(Commands.literal("farm")
+                                .executes(context -> farm(context, 10))
+                                .then(Commands.argument("range", IntegerArgumentType.integer(1, 128))
+                                        .executes(context -> farm(context, IntegerArgumentType.getInteger(context, "range")))))
+                        .then(Commands.literal("explore")
+                                .executes(context -> explore(context, 48))
+                                .then(Commands.argument("distance", IntegerArgumentType.integer(8, 256))
+                                        .executes(context -> explore(context, IntegerArgumentType.getInteger(context, "distance")))))
+                        .then(Commands.literal("sleep").executes(StayWithMeCommands::sleepThroughNight))
+                        .then(Commands.literal("night").executes(StayWithMeCommands::sleepThroughNight))
+                        .then(Commands.literal("outofwater").executes(StayWithMeCommands::getOutOfWater))
+                        .then(Commands.literal("dryland").executes(StayWithMeCommands::getOutOfWater))
+                        .then(Commands.literal("escapelava").executes(StayWithMeCommands::escapeLava))
+                        .then(Commands.literal("putoutfire")
+                                .executes(context -> putOutFire(context, 8))
+                                .then(Commands.argument("range", IntegerArgumentType.integer(1, 32))
+                                        .executes(context -> putOutFire(context, IntegerArgumentType.getInteger(context, "range")))))
+                        .then(Commands.literal("extinguish")
+                                .executes(context -> putOutFire(context, 8))
+                                .then(Commands.argument("range", IntegerArgumentType.integer(1, 32))
+                                        .executes(context -> putOutFire(context, IntegerArgumentType.getInteger(context, "range")))))
+                        .then(Commands.literal("equiparmor")
+                                .then(Commands.argument("target", StringArgumentType.word())
+                                        .executes(StayWithMeCommands::equipArmor)))
+                        .then(Commands.literal("protect").executes(StayWithMeCommands::protectPlayer))
+                        .then(Commands.literal("hero").executes(StayWithMeCommands::protectPlayer))
+                        .then(Commands.literal("retreat")
+                                .executes(context -> retreatFromHostiles(context, 16))
+                                .then(Commands.argument("distance", IntegerArgumentType.integer(4, 64))
+                                        .executes(context -> retreatFromHostiles(context, IntegerArgumentType.getInteger(context, "distance")))))
+                        .then(Commands.literal("flee")
+                                .executes(context -> retreatFromHostiles(context, 16))
+                                .then(Commands.argument("distance", IntegerArgumentType.integer(4, 64))
+                                        .executes(context -> retreatFromHostiles(context, IntegerArgumentType.getInteger(context, "distance")))))
+                        .then(Commands.literal("creeperretreat")
+                                .executes(context -> retreatFromCreepers(context, 10))
+                                .then(Commands.argument("distance", IntegerArgumentType.integer(4, 64))
+                                        .executes(context -> retreatFromCreepers(context, IntegerArgumentType.getInteger(context, "distance")))))
+                        .then(Commands.literal("fleecreeper")
+                                .executes(context -> retreatFromCreepers(context, 10))
+                                .then(Commands.argument("distance", IntegerArgumentType.integer(4, 64))
+                                        .executes(context -> retreatFromCreepers(context, IntegerArgumentType.getInteger(context, "distance")))))
+                        .then(Commands.literal("dodge")
+                                .executes(context -> dodgeProjectiles(context, 4))
+                                .then(Commands.argument("distance", IntegerArgumentType.integer(1, 16))
+                                        .executes(context -> dodgeProjectiles(context, IntegerArgumentType.getInteger(context, "distance")))))
+                        .then(Commands.literal("projectilewall")
+                                .executes(context -> projectileProtectionWall(context, 16))
+                                .then(Commands.argument("range", IntegerArgumentType.integer(4, 64))
+                                        .executes(context -> projectileProtectionWall(context, IntegerArgumentType.getInteger(context, "range")))))
+                        .then(Commands.literal("arrowwall")
+                                .executes(context -> projectileProtectionWall(context, 16))
+                                .then(Commands.argument("range", IntegerArgumentType.integer(4, 64))
+                                        .executes(context -> projectileProtectionWall(context, IntegerArgumentType.getInteger(context, "range")))))
+                        .then(Commands.literal("attack").executes(StayWithMeCommands::attackNearbyHostile))
+                        .then(Commands.literal("fight").executes(StayWithMeCommands::attackNearbyHostile))
                         .then(Commands.literal("mine")
                                 .then(Commands.argument("resource", ResourceLocationArgument.id())
                                         .executes(context -> mineResource(context, 1))
@@ -85,10 +201,35 @@ public final class StayWithMeCommands {
                                         .executes(context -> craftItem(context, 1))
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> craftItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
+                        .then(Commands.literal("get")
+                                .then(Commands.argument("item", StringArgumentType.word())
+                                        .executes(context -> getItem(context, 1))
+                                        .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
+                                                .executes(context -> getItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
+                        .then(Commands.literal("pickup")
+                                .then(Commands.argument("item", StringArgumentType.word())
+                                        .executes(context -> pickupDroppedItem(context, 1))
+                                        .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
+                                                .executes(context -> pickupDroppedItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
+                        .then(Commands.literal("give")
+                                .then(Commands.argument("item", StringArgumentType.word())
+                                        .executes(context -> giveItem(context, 1))
+                                        .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
+                                                .executes(context -> giveItem(context, IntegerArgumentType.getInteger(context, "amount"))))))
+                        .then(Commands.literal("deposit").executes(StayWithMeCommands::depositInventory))
+                        .then(Commands.literal("stash").executes(StayWithMeCommands::depositInventory))
                         .then(Commands.literal("status").executes(StayWithMeCommands::status))
                         .then(Commands.literal("expeditionstatus").executes(StayWithMeCommands::expeditionStatus))
                         .then(Commands.literal("observe").executes(StayWithMeCommands::observe))
                         .then(Commands.literal("integrations").executes(StayWithMeCommands::integrations))
+                        .then(Commands.literal("capabilities").executes(StayWithMeCommands::capabilities))
+                        .then(Commands.literal("catalogue")
+                                .executes(context -> playerEngineCatalogue(context, ""))
+                                .then(Commands.argument("query", StringArgumentType.greedyString())
+                                        .executes(context -> playerEngineCatalogue(
+                                                context,
+                                                StringArgumentType.getString(context, "query")
+                                        ))))
                         .then(Commands.literal("recipes")
                                 .executes(StayWithMeCommands::recipesSummary)
                                 .then(Commands.argument("query", StringArgumentType.greedyString())
@@ -148,6 +289,55 @@ public final class StayWithMeCommands {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int goToPosition(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        int x = IntegerArgumentType.getInteger(context, "x");
+        int y = IntegerArgumentType.getInteger(context, "y");
+        int z = IntegerArgumentType.getInteger(context, "z");
+        String target = x + "," + y + "," + z;
+        return startHighLevelTask(
+                context,
+                FriendTaskType.GO_TO_POSITION,
+                target,
+                0,
+                "Command /staywithme goto " + target,
+                "Going to " + target + "."
+        );
+    }
+
+    private static int placeBlock(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        String rawBlock = StringArgumentType.getString(context, "block");
+        Optional<String> block = normalizePlaceBlockCommandTarget(rawBlock);
+        if (block.isEmpty()) {
+            context.getSource().sendFailure(Component.literal("Invalid placeable block target: " + rawBlock));
+            return 0;
+        }
+        return placeBlock(context, block.get(), "Command /staywithme place", "Placing " + block.get());
+    }
+
+    private static int placeThrowawayBlock(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return placeBlock(context, "throwaway", "Command /staywithme placethrowaway", "Placing a throwaway route block");
+    }
+
+    private static int placeBlock(
+            CommandContext<CommandSourceStack> context,
+            String blockTarget,
+            String reason,
+            String feedbackPrefix
+    ) throws CommandSyntaxException {
+        int x = IntegerArgumentType.getInteger(context, "x");
+        int y = IntegerArgumentType.getInteger(context, "y");
+        int z = IntegerArgumentType.getInteger(context, "z");
+        String encodedTarget = blockTarget + "@" + x + "," + y + "," + z;
+        return startHighLevelTask(
+                context,
+                FriendTaskType.PLACE_BLOCK,
+                encodedTarget,
+                1,
+                reason + " " + encodedTarget,
+                feedbackPrefix + " at " + x + "," + y + "," + z + "."
+        );
+    }
+
     private static int stop(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
         Optional<FriendEntity> friend = findNearestFriend(player);
@@ -197,8 +387,383 @@ public final class StayWithMeCommands {
         return startWorkflowTask(context, FriendTaskType.MAKE_IRON_PICKAXE, "iron_pickaxe", "Command /staywithme ironpickaxe", "commands.staywithme.ironpickaxe");
     }
 
+    private static int buildingMaterials(CommandContext<CommandSourceStack> context, int count) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.COLLECT_BUILDING_MATERIALS,
+                "building_materials",
+                count,
+                "Command /staywithme buildingmaterials",
+                "Collecting route building materials x" + count + " with PlayerEngine."
+        );
+    }
+
+    private static int food(CommandContext<CommandSourceStack> context, int units) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        Optional<FriendEntity> friend = findNearestFriend(player);
+        if (friend.isEmpty()) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+
+        FriendTask task = new FriendTask(
+                FriendTaskType.COLLECT_FOOD,
+                player.getUUID(),
+                player.getGameProfile().getName(),
+                "food",
+                units,
+                null,
+                "Command /staywithme food"
+        );
+        friend.get().setOwner(player);
+        friend.get().startTask(task);
+        JsonMemoryStore.appendTask(player.getUUID(), player.getGameProfile().getName(), task.summary());
+        context.getSource().sendSuccess(() -> Component.literal("Collecting food units x" + units + "."), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int fish(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.FISH,
+                "fish",
+                1,
+                "Command /staywithme fish",
+                "Fishing with PlayerEngine until stopped."
+        );
+    }
+
+    private static int meat(CommandContext<CommandSourceStack> context, int units) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.COLLECT_MEAT,
+                "meat",
+                units,
+                "Command /staywithme meat",
+                "Collecting meat food units x" + units + " with PlayerEngine."
+        );
+    }
+
+    private static int fuel(CommandContext<CommandSourceStack> context, int count) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.COLLECT_FUEL,
+                "fuel",
+                count,
+                "Command /staywithme fuel",
+                "Collecting fuel items x" + count + " with PlayerEngine."
+        );
+    }
+
+    private static int smeltItem(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
+        String rawTarget = StringArgumentType.getString(context, "target");
+        Optional<String> target = normalizeHighLevelWordTarget(rawTarget)
+                .flatMap(StayWithMeCommands::normalizeSmeltCommandTarget);
+        if (target.isEmpty()) {
+            context.getSource().sendFailure(Component.literal("Smelt target must be iron_ingot, gold_ingot, copper_ingot, charcoal, or a raw ore alias."));
+            return 0;
+        }
+        return startHighLevelTask(
+                context,
+                FriendTaskType.SMELT_ITEM,
+                target.get(),
+                amount,
+                "Command /staywithme smelt",
+                "Smelting " + target.get() + " x" + amount + " with PlayerEngine furnace automation."
+        );
+    }
+
+    private static int farm(CommandContext<CommandSourceStack> context, int range) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.FARM,
+                "crops",
+                range,
+                "Command /staywithme farm",
+                "Farming nearby crops within range " + range + " until stopped."
+        );
+    }
+
+    private static int explore(CommandContext<CommandSourceStack> context, int distance) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.EXPLORE,
+                "area",
+                distance,
+                "Command /staywithme explore",
+                "Exploring about " + distance + " blocks with PlayerEngine-first movement."
+        );
+    }
+
+    private static int sleepThroughNight(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.SLEEP_THROUGH_NIGHT,
+                "night",
+                1,
+                "Command /staywithme sleep",
+                "Sleeping through the night with PlayerEngine."
+        );
+    }
+
+    private static int getOutOfWater(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.GET_OUT_OF_WATER,
+                "dry_land",
+                0,
+                "Command /staywithme outofwater",
+                "Getting out of water with PlayerEngine."
+        );
+    }
+
+    private static int escapeLava(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.ESCAPE_LAVA,
+                "lava_escape",
+                0,
+                "Command /staywithme escapelava",
+                "Escaping lava with PlayerEngine."
+        );
+    }
+
+    private static int putOutFire(CommandContext<CommandSourceStack> context, int range) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.PUT_OUT_FIRE,
+                "fire",
+                range,
+                "Command /staywithme putoutfire",
+                "Putting out nearby fire with PlayerEngine-first execution."
+        );
+    }
+
+    private static int equipArmor(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        String rawTarget = StringArgumentType.getString(context, "target");
+        Optional<String> target = normalizeHighLevelWordTarget(rawTarget);
+        if (target.isEmpty()) {
+            context.getSource().sendFailure(Component.literal("Invalid armor target: " + rawTarget));
+            return 0;
+        }
+        return startHighLevelTask(
+                context,
+                FriendTaskType.EQUIP_ARMOR,
+                target.get(),
+                1,
+                "Command /staywithme equiparmor",
+                "Equipping armor target " + target.get() + "."
+        );
+    }
+
+    private static int protectPlayer(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.PROTECT_PLAYER,
+                "player",
+                0,
+                "Command /staywithme protect",
+                "Protecting the nearby area with PlayerEngine until stopped."
+        );
+    }
+
+    private static int retreatFromHostiles(CommandContext<CommandSourceStack> context, int distance) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.RETREAT_FROM_HOSTILES,
+                "hostiles",
+                distance,
+                "Command /staywithme retreat",
+                "Retreating from nearby hostile mobs with PlayerEngine."
+        );
+    }
+
+    private static int retreatFromCreepers(CommandContext<CommandSourceStack> context, int distance) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.RETREAT_FROM_CREEPERS,
+                "creepers",
+                distance,
+                "Command /staywithme creeperretreat",
+                "Retreating from nearby creepers with PlayerEngine-first execution."
+        );
+    }
+
+    private static int dodgeProjectiles(CommandContext<CommandSourceStack> context, int distance) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.DODGE_PROJECTILES,
+                "projectiles",
+                distance,
+                "Command /staywithme dodge",
+                "Dodging incoming projectiles with PlayerEngine."
+        );
+    }
+
+    private static int projectileProtectionWall(CommandContext<CommandSourceStack> context, int range) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.PROJECTILE_PROTECTION_WALL,
+                "skeleton_projectiles",
+                range,
+                "Command /staywithme projectilewall",
+                "Building a projectile protection wall with PlayerEngine."
+        );
+    }
+
+    private static int attackNearbyHostile(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.ATTACK_NEARBY_HOSTILE,
+                "nearby_hostile",
+                1,
+                "Command /staywithme attack",
+                "Attacking one nearby hostile mob."
+        );
+    }
+
     private static int craftItem(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
-        String rawItem = commandResourceId(context, "item");
+        return startGenericItemTask(
+                context,
+                "item",
+                amount,
+                FriendTaskType.CRAFT_ITEM,
+                "Command /staywithme craft ",
+                "Crafting "
+        );
+    }
+
+    private static int getItem(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
+        return startGenericCatalogueTask(context, "item", amount, "Command /staywithme get ", "Getting ");
+    }
+
+    private static int pickupDroppedItem(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
+        String rawItem = StringArgumentType.getString(context, "item");
+        Optional<String> target = normalizeCatalogueCommandTarget(rawItem);
+        if (target.isEmpty()) {
+            context.getSource().sendFailure(Component.literal("Invalid item or PlayerEngine catalogue name: " + rawItem));
+            return 0;
+        }
+        if (isFoodCommandTarget(target.get()) || isMeatCommandTarget(target.get()) || isFuelCommandTarget(target.get())) {
+            context.getSource().sendFailure(Component.literal("Pickup needs a concrete dropped item such as bread, cooked_beef, coal, cobblestone, or torch."));
+            return 0;
+        }
+
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        Optional<FriendEntity> friend = findNearestFriend(player);
+        if (friend.isEmpty()) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+
+        FriendTask task = new FriendTask(
+                FriendTaskType.PICKUP_DROPPED_ITEM,
+                player.getUUID(),
+                player.getGameProfile().getName(),
+                target.get(),
+                amount,
+                null,
+                "Command /staywithme pickup " + target.get()
+        );
+        friend.get().setOwner(player);
+        friend.get().startTask(task);
+        JsonMemoryStore.appendTask(player.getUUID(), player.getGameProfile().getName(), task.summary());
+        context.getSource().sendSuccess(
+                () -> Component.literal("Picking up dropped " + target.get() + " x" + amount + " with PlayerEngine."),
+                false
+        );
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int giveItem(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
+        String rawItem = StringArgumentType.getString(context, "item");
+        Optional<String> target = normalizeCatalogueCommandTarget(rawItem);
+        if (target.isEmpty()) {
+            context.getSource().sendFailure(Component.literal("Invalid item or PlayerEngine catalogue name: " + rawItem));
+            return 0;
+        }
+        if (isFoodCommandTarget(target.get()) || isMeatCommandTarget(target.get()) || isFuelCommandTarget(target.get())) {
+            context.getSource().sendFailure(Component.literal("Give needs a concrete item such as bread, cooked_beef, coal, or torch. Use /staywithme food, /staywithme meat, or /staywithme fuel for broad collection."));
+            return 0;
+        }
+
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        Optional<FriendEntity> friend = findNearestFriend(player);
+        if (friend.isEmpty()) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+
+        FriendTask task = new FriendTask(
+                FriendTaskType.GIVE_ITEM,
+                player.getUUID(),
+                player.getGameProfile().getName(),
+                target.get(),
+                amount,
+                null,
+                "Command /staywithme give " + target.get()
+        );
+        friend.get().setOwner(player);
+        friend.get().startTask(task);
+        JsonMemoryStore.appendTask(player.getUUID(), player.getGameProfile().getName(), task.summary());
+        context.getSource().sendSuccess(
+                () -> Component.literal("Giving " + target.get() + " x" + amount + " to " + player.getGameProfile().getName() + " with PlayerEngine."),
+                false
+        );
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int depositInventory(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return startHighLevelTask(
+                context,
+                FriendTaskType.DEPOSIT_INVENTORY,
+                "inventory",
+                0,
+                "Command /staywithme deposit",
+                "Depositing non-tool inventory into a nearby or newly placed container with PlayerEngine."
+        );
+    }
+
+    private static int startHighLevelTask(
+            CommandContext<CommandSourceStack> context,
+            FriendTaskType type,
+            String target,
+            int amount,
+            String reason,
+            String feedback
+    ) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        Optional<FriendEntity> friend = findNearestFriend(player);
+        if (friend.isEmpty()) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+
+        FriendTask task = new FriendTask(
+                type,
+                player.getUUID(),
+                player.getGameProfile().getName(),
+                target,
+                amount,
+                null,
+                reason
+        );
+        friend.get().setOwner(player);
+        friend.get().startTask(task);
+        JsonMemoryStore.appendTask(player.getUUID(), player.getGameProfile().getName(), task.summary());
+        context.getSource().sendSuccess(() -> Component.literal(feedback), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int startGenericItemTask(
+            CommandContext<CommandSourceStack> context,
+            String argumentName,
+            int amount,
+            FriendTaskType type,
+            String reasonPrefix,
+            String feedbackPrefix
+    ) throws CommandSyntaxException {
+        String rawItem = commandResourceId(context, argumentName);
         ResourceLocation itemId = parseItemId(rawItem);
         if (itemId == null) {
             context.getSource().sendFailure(Component.literal("Invalid item id: " + rawItem));
@@ -213,18 +778,70 @@ public final class StayWithMeCommands {
         }
 
         FriendTask task = new FriendTask(
-                FriendTaskType.CRAFT_ITEM,
+                type,
                 player.getUUID(),
                 player.getGameProfile().getName(),
                 itemId.toString(),
                 amount,
                 null,
-                "Command /staywithme craft " + itemId
+                reasonPrefix + itemId
         );
         friend.get().setOwner(player);
         friend.get().startTask(task);
         JsonMemoryStore.appendTask(player.getUUID(), player.getGameProfile().getName(), task.summary());
-        context.getSource().sendSuccess(() -> Component.translatable("commands.staywithme.craftitem", itemId.toString(), amount), false);
+        context.getSource().sendSuccess(() -> Component.literal(feedbackPrefix + itemId + " x" + amount + "."), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int startGenericCatalogueTask(
+            CommandContext<CommandSourceStack> context,
+            String argumentName,
+            int amount,
+            String reasonPrefix,
+            String feedbackPrefix
+    ) throws CommandSyntaxException {
+        String rawItem = StringArgumentType.getString(context, argumentName);
+        Optional<String> target = normalizeCatalogueCommandTarget(rawItem);
+        if (target.isEmpty()) {
+            context.getSource().sendFailure(Component.literal("Invalid item or PlayerEngine catalogue name: " + rawItem));
+            return 0;
+        }
+
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        Optional<FriendEntity> friend = findNearestFriend(player);
+        if (friend.isEmpty()) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+
+        FriendTaskType type;
+        String taskTarget;
+        if (isFoodCommandTarget(target.get())) {
+            type = FriendTaskType.COLLECT_FOOD;
+            taskTarget = "food";
+        } else if (isMeatCommandTarget(target.get())) {
+            type = FriendTaskType.COLLECT_MEAT;
+            taskTarget = "meat";
+        } else if (isFuelCommandTarget(target.get())) {
+            type = FriendTaskType.COLLECT_FUEL;
+            taskTarget = "fuel";
+        } else {
+            type = FriendTaskType.GET_ITEM;
+            taskTarget = target.get();
+        }
+        FriendTask task = new FriendTask(
+                type,
+                player.getUUID(),
+                player.getGameProfile().getName(),
+                taskTarget,
+                amount,
+                null,
+                reasonPrefix + taskTarget
+        );
+        friend.get().setOwner(player);
+        friend.get().startTask(task);
+        JsonMemoryStore.appendTask(player.getUUID(), player.getGameProfile().getName(), task.summary());
+        context.getSource().sendSuccess(() -> Component.literal(feedbackPrefix + taskTarget + " x" + amount + "."), false);
         return Command.SINGLE_SUCCESS;
     }
 
@@ -233,6 +850,16 @@ public final class StayWithMeCommands {
         String normalized = MiningTargetRegistry.normalize(rawResource);
         Optional<MiningTargetRegistry.MiningTarget> miningTarget = MiningTargetRegistry.find(normalized);
         if (miningTarget.isEmpty()) {
+            if (canPlayerEngineAcquire(rawResource)) {
+                return startGenericItemTask(
+                        context,
+                        "resource",
+                        amount,
+                        FriendTaskType.GET_ITEM,
+                        "Command /staywithme mine via PlayerEngine get ",
+                        "Getting "
+                );
+            }
             context.getSource().sendFailure(Component.literal("No executable mining target for "
                     + normalized
                     + ". Supported now: "
@@ -265,6 +892,17 @@ public final class StayWithMeCommands {
                 false
         );
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static boolean canPlayerEngineAcquire(String rawResource) {
+        if (!IntegrationStatus.isPlayerEngineLoaded()) {
+            return false;
+        }
+        try {
+            return PlayerEngineCatalogueDiagnostics.canResolve(rawResource);
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
+        }
     }
 
     private static int minePlan(CommandContext<CommandSourceStack> context, int amount) throws CommandSyntaxException {
@@ -377,15 +1015,26 @@ public final class StayWithMeCommands {
         FriendEntity entity = friend.get();
         context.getSource().sendSuccess(
                 () -> Component.literal("State=" + entity.getFriendState().name()
+                        + ", entity=" + entity.getClass().getSimpleName()
                         + ", controller=" + entity.getFriendBrain().getControllerName()
                         + ", compat={" + entity.getFriendBrain().getControllerStatus() + "}"
                         + ", inventory=" + entity.getInventorySummary()
                         + ", hunger={" + entity.getHungerProvider().summary() + "}"
                         + ", perception={" + entity.getPerception().refreshNow().summary() + "}"
+                        + lastFailureSuffix(entity)
                         + ", task=" + entity.getTaskSummary()),
                 false
         );
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static String lastFailureSuffix(FriendEntity entity) {
+        String message = entity.getFriendBrain().getLastFailureMessage();
+        if (message == null || message.isBlank()) {
+            return "";
+        }
+        String trimmed = message.length() > 180 ? message.substring(0, 180) + "..." : message;
+        return ", lastFailure=\"" + trimmed.replace('"', '\'') + "\"";
     }
 
     private static int expeditionStatus(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -422,6 +1071,66 @@ public final class StayWithMeCommands {
     private static int integrations(CommandContext<CommandSourceStack> context) {
         context.getSource().sendSuccess(() -> Component.literal(IntegrationStatus.describe()), false);
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static int capabilities(CommandContext<CommandSourceStack> context) {
+        boolean playerEngineActive = IntegrationStatus.isPlayerEngineLoaded() && StayWithMeConfig.USE_PLAYERENGINE_CONTROLLER.get();
+        context.getSource().sendSuccess(
+                () -> Component.literal("High-level tasks: " + HighLevelTaskSurface.ENTRY_POINTS + "."),
+                false
+        );
+        context.getSource().sendSuccess(
+                () -> Component.literal("PlayerEngine-first: "
+                        + (playerEngineActive ? "enabled" : "disabled")
+                        + " ("
+                        + HighLevelTaskSurface.PLAYERENGINE_FIRST_SUMMARY
+                        + ")."),
+                false
+        );
+        context.getSource().sendSuccess(
+                () -> Component.literal("Forge fallback: vanilla recipes, mining registry, visible wood/resource collection, construction-route recovery, expedition memory/safety."),
+                false
+        );
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int playerEngineCatalogue(CommandContext<CommandSourceStack> context, String query) {
+        if (!IntegrationStatus.isPlayerEngineLoaded()) {
+            context.getSource().sendFailure(Component.literal("PlayerEngine is not loaded."));
+            return 0;
+        }
+        try {
+            List<String> matches = PlayerEngineCatalogueDiagnostics.search(query, 20);
+            String label = query == null || query.isBlank() ? "<all>" : query;
+            context.getSource().sendSuccess(
+                    () -> Component.literal("PlayerEngine catalogue query " + label + ": " + matches.size() + " shown"),
+                    false
+            );
+            if (query != null && !query.isBlank()) {
+                context.getSource().sendSuccess(
+                        () -> Component.literal("Input resolution: " + PlayerEngineCatalogueDiagnostics.resolveSummary(query)),
+                        false
+                );
+            }
+            if (matches.isEmpty()) {
+                if (query != null && !query.isBlank()) {
+                    context.getSource().sendSuccess(
+                            () -> Component.literal("Closest catalogue names: "
+                                    + String.join(", ", PlayerEngineCatalogueDiagnostics.closestMatches(query, 8))),
+                            false
+                    );
+                }
+                return Command.SINGLE_SUCCESS;
+            }
+            context.getSource().sendSuccess(() -> Component.literal(String.join(", ", matches)), false);
+            return Command.SINGLE_SUCCESS;
+        } catch (RuntimeException | LinkageError error) {
+            context.getSource().sendFailure(Component.literal("PlayerEngine catalogue unavailable: "
+                    + error.getClass().getSimpleName()
+                    + ": "
+                    + error.getMessage()));
+            return 0;
+        }
     }
 
     private static int recipesSummary(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -597,6 +1306,110 @@ public final class StayWithMeCommands {
         }
         String normalized = rawItem.contains(":") ? rawItem.trim() : "minecraft:" + rawItem.trim();
         return ResourceLocation.tryParse(normalized);
+    }
+
+    private static Optional<String> normalizeCatalogueCommandTarget(String rawItem) {
+        if (rawItem == null || rawItem.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = rawItem.trim().toLowerCase(Locale.ROOT);
+        if (normalized.contains("/") || normalized.contains("\\")) {
+            return Optional.empty();
+        }
+        if (normalized.contains(":")) {
+            ResourceLocation id = ResourceLocation.tryParse(normalized);
+            return id == null ? Optional.empty() : Optional.of(id.toString());
+        }
+        normalized = normalized.replace('-', '_');
+        ResourceLocation id = ResourceLocation.tryParse("minecraft:" + normalized);
+        if (id == null) {
+            return Optional.empty();
+        }
+        return Optional.of(normalized);
+    }
+
+    private static Optional<String> normalizeHighLevelWordTarget(String rawTarget) {
+        if (rawTarget == null || rawTarget.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = rawTarget.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (normalized.contains("/") || normalized.contains("\\")) {
+            return Optional.empty();
+        }
+        if (normalized.contains(":")) {
+            ResourceLocation id = ResourceLocation.tryParse(normalized);
+            return id == null ? Optional.empty() : Optional.of(id.toString());
+        }
+        ResourceLocation id = ResourceLocation.tryParse("minecraft:" + normalized);
+        return id == null ? Optional.empty() : Optional.of(normalized);
+    }
+
+    private static boolean isFoodCommandTarget(String target) {
+        return "food".equals(target) || "foods".equals(target) || "minecraft:food".equals(target) || "minecraft:foods".equals(target);
+    }
+
+    private static boolean isMeatCommandTarget(String target) {
+        return "meat".equals(target) || "meats".equals(target) || "minecraft:meat".equals(target) || "minecraft:meats".equals(target);
+    }
+
+    private static boolean isFuelCommandTarget(String target) {
+        return "fuel".equals(target) || "fuels".equals(target) || "minecraft:fuel".equals(target) || "minecraft:fuels".equals(target);
+    }
+
+    private static Optional<String> normalizeSmeltCommandTarget(String target) {
+        if (target == null || target.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = target.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (normalized.startsWith("minecraft:")) {
+            normalized = normalized.substring("minecraft:".length());
+        }
+        return switch (normalized) {
+            case "iron", "raw_iron", "iron_ingot" -> Optional.of("iron_ingot");
+            case "gold", "raw_gold", "gold_ingot" -> Optional.of("gold_ingot");
+            case "copper", "raw_copper", "copper_ingot" -> Optional.of("copper_ingot");
+            case "charcoal" -> Optional.of("charcoal");
+            default -> Optional.empty();
+        };
+    }
+
+    private static Optional<String> normalizePlaceBlockCommandTarget(String target) {
+        if (target == null || target.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = target.trim().toLowerCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
+        if (normalized.contains("/") || normalized.contains("\\")) {
+            return Optional.empty();
+        }
+        if (normalized.startsWith("minecraft:")) {
+            normalized = normalized.substring("minecraft:".length());
+        }
+        if (isThrowawayPlaceBlockTarget(normalized)) {
+            return Optional.of("throwaway");
+        }
+        ResourceLocation id = ResourceLocation.tryParse(normalized.contains(":")
+                ? normalized
+                : "minecraft:" + normalized);
+        if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) {
+            return Optional.empty();
+        }
+        Block block = BuiltInRegistries.BLOCK.get(id);
+        if (block == Blocks.AIR || block.asItem() == Items.AIR) {
+            return Optional.empty();
+        }
+        return Optional.of(id.getNamespace().equals("minecraft") ? id.getPath() : id.toString());
+    }
+
+    private static boolean isThrowawayPlaceBlockTarget(String normalizedTarget) {
+        return "throwaway".equals(normalizedTarget)
+                || "throwaway_block".equals(normalizedTarget)
+                || "route_block".equals(normalizedTarget)
+                || "route_blocks".equals(normalizedTarget)
+                || "bridge_block".equals(normalizedTarget)
+                || "bridge_blocks".equals(normalizedTarget)
+                || "scaffold".equals(normalizedTarget)
+                || "scaffold_block".equals(normalizedTarget)
+                || "building_materials".equals(normalizedTarget);
     }
 
     private static String commandResourceId(CommandContext<CommandSourceStack> context, String argumentName) {

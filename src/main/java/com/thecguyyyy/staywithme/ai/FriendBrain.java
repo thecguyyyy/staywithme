@@ -13,6 +13,7 @@ import java.util.Optional;
 public class FriendBrain {
     private final FriendEntity friend;
     private final LocalBehaviorController localController;
+    private String lastFailureMessage = "";
 
     public FriendBrain(FriendEntity friend) {
         this.friend = friend;
@@ -25,27 +26,32 @@ public class FriendBrain {
     }
 
     public void startTask(FriendTask task) {
+        this.lastFailureMessage = "";
         this.friend.setCurrentTask(task);
         this.localController.onTaskStarted(task);
     }
 
     public void stopTask() {
+        this.lastFailureMessage = "";
         this.localController.stop();
         this.friend.setCurrentTask(null);
         this.friend.setFriendState(FriendState.IDLE);
     }
 
     public void completeTask() {
+        this.lastFailureMessage = "";
         this.localController.stopTransientTargets();
         this.friend.setCurrentTask(null);
         this.friend.setFriendState(FriendState.IDLE);
     }
 
     public void failTask(String message) {
+        String safeMessage = message == null || message.isBlank() ? "Task failed." : message;
+        this.lastFailureMessage = safeMessage;
         this.localController.stopTransientTargets();
         this.friend.setCurrentTask(null);
         this.friend.setFriendState(FriendState.ERROR);
-        this.localController.say(message);
+        this.localController.say(safeMessage);
     }
 
     public void saveControllerState(CompoundTag tag) {
@@ -74,6 +80,10 @@ public class FriendBrain {
 
     public String getExpeditionStatus() {
         return this.localController.getExpeditionStatus();
+    }
+
+    public String getLastFailureMessage() {
+        return this.lastFailureMessage;
     }
 
     private static EmbodiedController createEmbodiedController(FriendEntity friend) {

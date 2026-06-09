@@ -13,6 +13,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.BlockHitResult;
 
 import java.util.function.Predicate;
+import java.util.Optional;
 
 public class FriendInteractionProvider {
     private final FriendEntity friend;
@@ -35,12 +36,34 @@ public class FriendInteractionProvider {
         return this.fallback.tickBreakBlockToInventory(level, pos);
     }
 
+    public SurvivalWorldInteractor.BreakResult tickBreakBlockBelow(ServerLevel level, BlockPos pos) {
+        return this.fallback.tickBreakBlockBelowToInventory(level, pos);
+    }
+
     public void cancelBreakBlock() {
         this.fallback.reset();
     }
 
+    public Optional<SurvivalWorldInteractor.ToolBreakEvent> consumeToolBreakEvent() {
+        return this.fallback.consumeToolBreakEvent();
+    }
+
     public boolean placeBlock(ServerLevel level, BlockPos pos, Block block, Predicate<ItemStack> inventoryMatcher) {
         return this.fallback.placeBlockFromInventory(level, pos, block, inventoryMatcher);
+    }
+
+    public boolean placePillarBlock(ServerLevel level, BlockPos pos, Block block, Predicate<ItemStack> inventoryMatcher) {
+        return this.fallback.placePillarBlockFromInventory(level, pos, block, inventoryMatcher);
+    }
+
+    public boolean placeBridgeBlock(
+            ServerLevel level,
+            BlockPos pos,
+            BlockPos fromFeet,
+            Block block,
+            Predicate<ItemStack> inventoryMatcher
+    ) {
+        return this.fallback.placeBridgeBlockFromInventory(level, pos, fromFeet, block, inventoryMatcher);
     }
 
     public boolean canPlaceBlockAt(ServerLevel level, BlockPos pos) {

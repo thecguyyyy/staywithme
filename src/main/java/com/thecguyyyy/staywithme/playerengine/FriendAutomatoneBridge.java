@@ -8,6 +8,7 @@ import com.player2.playerengine.automaton.api.entity.LivingEntityInteractionMana
 import com.player2.playerengine.automaton.api.entity.LivingEntityInventory;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.ItemStack;
 
 public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionManagerProvider, IHungerManagerProvider {
@@ -67,7 +68,8 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
             this.livingInventory.main.set(slot, ItemStack.EMPTY);
         }
         for (int slot = 0; slot < this.livingInventory.armor.size(); slot++) {
-            this.livingInventory.armor.set(slot, ItemStack.EMPTY);
+            EquipmentSlot equipmentSlot = EquipmentSlot.byTypeAndIndex(EquipmentSlot.Type.ARMOR, slot);
+            this.livingInventory.armor.set(slot, this.friend.getItemBySlot(equipmentSlot).copy());
         }
         for (int slot = 0; slot < this.livingInventory.offHand.size(); slot++) {
             this.livingInventory.offHand.set(slot, ItemStack.EMPTY);
@@ -80,6 +82,19 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
         int size = Math.min(this.friend.getInventoryProvider().getContainerSize(), this.livingInventory.main.size());
         for (int slot = 0; slot < size; slot++) {
             this.friend.getInventoryProvider().setItem(slot, this.livingInventory.main.get(slot).copy());
+        }
+        for (int slot = 0; slot < this.livingInventory.armor.size(); slot++) {
+            EquipmentSlot equipmentSlot = EquipmentSlot.byTypeAndIndex(EquipmentSlot.Type.ARMOR, slot);
+            ItemStack entityStack = this.friend.getItemBySlot(equipmentSlot);
+            ItemStack bridgeStack = this.livingInventory.armor.get(slot);
+            if (ItemStack.matches(entityStack, bridgeStack)) {
+                continue;
+            }
+            if (!entityStack.isEmpty()) {
+                this.livingInventory.armor.set(slot, entityStack.copy());
+            } else {
+                this.friend.setItemSlot(equipmentSlot, bridgeStack.copy());
+            }
         }
         this.friend.getInventoryProvider().setSelectedSlot(this.livingInventory.selectedSlot);
         this.syncToFriendHunger();

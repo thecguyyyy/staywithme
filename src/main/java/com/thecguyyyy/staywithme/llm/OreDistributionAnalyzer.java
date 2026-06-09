@@ -3,10 +3,12 @@ package com.thecguyyyy.staywithme.llm;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
 import com.thecguyyyy.staywithme.config.StayWithMeConfig;
 import com.thecguyyyy.staywithme.memory.FriendMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import com.thecguyyyy.staywithme.util.JsonUtils;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.net.URI;
@@ -14,8 +16,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +31,7 @@ public class OreDistributionAnalyzer {
             - Do not output markdown.
             - Do not invent world-specific coordinates.
             - For vanilla Minecraft 1.20.1, use known ore generation and survival constraints.
+            - Treat any validated Minecraft 1.20.1 distribution supplied in the user prompt as authoritative.
             - For modded resources, state uncertainty clearly and suggest how to learn from datapacks, JEI/EMI, tags, and observed mining results.
             - Prefer strategies that a survival-mode player-like NPC can execute through pathing, mining, crafting, smelting, and safety checks.
 
@@ -109,41 +112,48 @@ public class OreDistributionAnalyzer {
     }
 
     private OreDistributionAnalysis localFallback(String resourceId, String reason) {
-        String normalized = resourceId.toLowerCase(Locale.ROOT);
-        if (normalized.contains("diamond")) {
-            OreDistributionAnalysis analysis = OreDistributionAnalysis.fallback(resourceId, "Mine deep in the Overworld near deepslate levels; branch mine carefully and avoid lava.");
-            analysis.oreBlockId = "minecraft:diamond_ore";
-            analysis.dimension = "minecraft:overworld";
-            analysis.yLevelHint = "deep negative Y, commonly around deepslate diamond layers";
-            analysis.requiredTool = "iron pickaxe or better";
-            analysis.confidence = "medium";
-            analysis.source = "local_vanilla_fallback";
-            return analysis;
-        }
-        if (normalized.contains("iron")) {
-            OreDistributionAnalysis analysis = OreDistributionAnalysis.fallback(resourceId, "Mine iron ore or deepslate iron ore, then smelt raw iron in a furnace with fuel.");
-            analysis.oreBlockId = "minecraft:iron_ore";
-            analysis.dimension = "minecraft:overworld";
-            analysis.yLevelHint = "broad Overworld range; caves and mountains are useful";
-            analysis.requiredTool = "stone pickaxe or better";
-            analysis.confidence = "medium";
-            analysis.source = "local_vanilla_fallback";
-            return analysis;
-        }
-        if (normalized.contains("coal")) {
-            OreDistributionAnalysis analysis = OreDistributionAnalysis.fallback(resourceId, "Mine coal ore in exposed stone, caves, or mountains.");
-            analysis.oreBlockId = "minecraft:coal_ore";
-            analysis.dimension = "minecraft:overworld";
-            analysis.yLevelHint = "common above deepslate and in mountains";
-            analysis.requiredTool = "wooden pickaxe or better";
-            analysis.confidence = "medium";
-            analysis.source = "local_vanilla_fallback";
+        Optional<MiningTargetRegistry.MiningTarget> knownTarget = MiningTargetRegistry.find(resourceId);
+        if (knownTarget.isPresent()) {
+            MiningTargetRegistry.MiningTarget target = knownTarget.get();
+            MiningTargetRegistry.ExplorationProfile profile = target.explorationProfile();
+            OreDistributionAnalysis analysis = OreDistributionAnalysis.fallback(
+                    resourceId,
+                    "Search visible exposed sources first, then use a survival tunnel in the validated practical abundance band."
+            );
+            if (target.sourceBlocks().length > 0) {
+                analysis.oreBlockId = BuiltInRegistries.BLOCK.getKey(target.sourceBlocks()[0]).toString();
+            }
+            analysis.dimension = profile.dimension();
+            analysis.yLevelHint = "practical band Y="
+                    + profile.preferredYMin()
+                    + ".."
+                    + profile.preferredYMax()
+                    + "; "
+                    + profile.distributionHint();
+            analysis.requiredTool = target.requiredToolHint();
+            analysis.confidence = "high";
+            analysis.source = "local_vanilla_1_20_1_registry";
             return analysis;
         }
         return OreDistributionAnalysis.fallback(resourceId, reason + " Unknown or modded resource; learn from observed blocks, loot, tags, recipes, and pack-specific plugins.");
     }
 
     private String buildUserPrompt(String resourceId, ServerPlayer player, FriendMemory memory) {
+        String validatedDistribution = MiningTargetRegistry.find(resourceId)
+                .map(target -> {
+                    MiningTargetRegistry.ExplorationProfile profile = target.explorationProfile();
+                    return "dimension="
+                            + profile.dimension()
+                            + "; practical abundance band Y="
+                            + profile.preferredYMin()
+                            + ".."
+                            + profile.preferredYMax()
+                            + "; required tool="
+                            + target.requiredToolHint()
+                            + "; "
+                            + profile.distributionHint();
+                })
+                .orElse("unknown or modded resource");
         return """
                 Analyze how this companion should learn and obtain the resource.
 
@@ -151,6 +161,7 @@ public class OreDistributionAnalyzer {
                 Minecraft version: 1.20.1
                 Current dimension: %s
                 Player Y: %.1f
+                Validated Minecraft 1.20.1 distribution: %s
                 Existing portable memory JSON:
                 %s
 
@@ -159,6 +170,7 @@ public class OreDistributionAnalyzer {
                 resourceId,
                 player.serverLevel().dimension().location(),
                 player.getY(),
+                validatedDistribution,
                 JsonUtils.toJson(memory)
         );
     }

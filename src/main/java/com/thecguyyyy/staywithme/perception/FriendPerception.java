@@ -7,6 +7,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -74,6 +75,16 @@ public class FriendPerception {
         return monsters.stream()
                 .min(Comparator.comparingDouble(this.friend::distanceToSqr))
                 .map(entity -> (LivingEntity) entity);
+    }
+
+    public Optional<Creeper> nearestCreeper(int radius) {
+        if (!(this.friend.level() instanceof ServerLevel level)) {
+            return Optional.empty();
+        }
+        AABB searchBox = this.friend.getBoundingBox().inflate(radius);
+        List<Creeper> creepers = level.getEntitiesOfClass(Creeper.class, searchBox, LivingEntity::isAlive);
+        return creepers.stream()
+                .min(Comparator.comparingDouble(this.friend::distanceToSqr));
     }
 
     private void refresh(ServerLevel level) {

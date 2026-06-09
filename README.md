@@ -28,6 +28,7 @@ Minecraft server tick 必须稳定运行。LLM 请求有网络延迟、费用、
 
 - `/staywithme spawn`：在玩家附近生成 companion。
 - `/staywithme follow`：让最近的 companion 跟随玩家。
+- `/staywithme goto <x> <y> <z>`：让最近的 companion 前往当前维度的指定方块坐标，优先使用 PlayerEngine `GetToBlockTask`。
 - `/staywithme stop`：停止最近 companion 的当前任务。
 - `/staywithme crafttable`：让 companion 自己找原木、制作工作台并放到地上。
 - `/staywithme craftingtable` / `/staywithme workbench`：`crafttable` 的别名。
@@ -45,6 +46,8 @@ Minecraft server tick 必须稳定运行。LLM 请求有网络延迟、费用、
 - `/staywithme recipes`：显示当前服务端 RecipeManager 已加载的 recipe type 统计。
 - `/staywithme recipes <query>`：按配方 id、recipe type、serializer、输出物品或 ingredient 查询当前加载的配方。
 - `/staywithme mine <resource> [amount]`：执行第一版可行动采矿策略；已知资源会映射到可挖方块组，优先使用 PlayerEngine/Baritone mine process，失败时回落到本地生存交互。
+- `/staywithme attack` / `/staywithme fight`: attack one nearby hostile mob, preferring PlayerEngine `KillEntityTask` when available.
+- `/staywithme sleep` / `/staywithme night`: sleep through the night with PlayerEngine `SleepThroughNightTask`; daytime completes immediately.
 - `/staywithme mineplan <resource> [amount]`：生成高层采矿远征 JSON 策略并写入长期记忆；LLM 未配置时使用本地原版策略 fallback。
 - `/staywithme expedition <resource> [amount]`：先生成远征策略，再启动当前可执行采矿 workflow；低层移动/挖掘仍由本地控制器和 PlayerEngine/Baritone 执行。
 - `/staywithme oreinfo <resource>`：异步询问 LLM 分析矿物/资源分布策略，返回 JSON 后写入长期记忆；LLM 未配置时使用本地 fallback。
@@ -426,7 +429,7 @@ The API key field is intentionally blank when the screen opens. Leave it blank t
 
 ## Current Development Focus
 
-The active development focus is no-LLM embodied foundation. The goal is to make `FriendEntity` move toward the structure of the Fabric Player2NPC `AutomatoneEntity` first, then reconnect LLM planning later.
+The active development focus is now PlayerEngine-first execution. `StayWithMe` should act as the LLM planning, memory, policy, UI, debugging, and fallback layer, while broad Minecraft survival behavior is delegated to PlayerEngine/TaskCatalogue whenever PlayerEngine is installed.
 
 Reference model from Fabric Player2NPC:
 
@@ -438,11 +441,32 @@ Reference model from Fabric Player2NPC:
 
 Current Forge implementation:
 
-- PlayerEngine is optional and isolated behind bridge classes.
+- PlayerEngine remains optional at runtime.
 - `FriendEntity` stays loadable without PlayerEngine.
-- Full `PlayerEngineController` is not force-ticked yet.
-- Movement/pathing can use PlayerEngine/Automatone when enabled.
-- Mining now tries PlayerEngine/Baritone first when enabled, then falls back to the survival interactor.
+- When PlayerEngine is loaded, `FriendEntityFactory` reflects a `PlayerEngineFriendEntity` subclass that implements PlayerEngine inventory, interaction, and hunger provider interfaces.
+- `FriendPlayerEngineController` now creates a real `PlayerEngineController`, calls `TaskCatalogue.getItemTask(...)` for high-level acquisition, and wraps PlayerEngine tasks such as dropped item pickup, route building-material supply, furnace smelting, fuel collection, exploration, water/lava escape, fire block extinguishing, item handoff, inventory deposit, armor equip, farming/fishing, single-hostile combat, hostile retreat, creeper-specific retreat, projectile dodging, projectile walling, and continuous HeroTask protection.
+- Movement/pathing/following/goto/returning/mining/acquisition/combat try PlayerEngine first when enabled, then fall back to Forge-native behavior.
+- PlayerEngine acquisition uses shared catalogue-name normalization for common user/LLM forms such as logs, sticks, ore blocks, raw mineral drops, lapis, quartz, and pickaxe aliases.
+- `/staywithme follow`, `/staywithme goto <x> <y> <z>`, and return-to-player requests now prefer PlayerEngine `FollowPlayerTask` / `GetToBlockTask` / `GetToEntityTask` before using Forge-native navigation fallback.
+- `/staywithme get <item> [amount]` now accepts PlayerEngine-style catalogue words such as `log`, `sticks`, and `torches` as well as vanilla item ids, with local fallback normalization for common aliases when PlayerEngine is unavailable.
+- `/staywithme pickup <item> [amount]` is a PlayerEngine-backed pickup-only entry that uses `PickupDroppedItemTask` for existing dropped item entities and does not mine, craft, or broad-get missing items.
+- `/staywithme buildingmaterials [count]`, `/staywithme routeblocks [count]`, and `/staywithme bridgeblocks [count]` use PlayerEngine `GetBuildingMaterialsTask` to prepare throwaway route/bridge/scaffold blocks for path recovery.
+- Construction-route recovery can now request PlayerEngine building-material restock internally when a validated route needs bridge, repair, or pillar blocks and the companion has none, then it replans from the new position.
+- `/staywithme explore [distance]` uses PlayerEngine `TimeoutWanderTask` when available, with a deterministic Forge fallback that searches for a reachable standable target outward from the current position.
+- `/staywithme protect` and `/staywithme hero` use PlayerEngine `HeroTask` to continuously hunt nearby hostile mobs and pick hostile drops until stopped.
+- Broad obtain requests now use a dedicated `GET_ITEM` task type instead of overloading `CRAFT_ITEM`; explicit `/staywithme craft` requests still use `CRAFT_ITEM`.
+- General food requests use a dedicated `COLLECT_FOOD` task type and `/staywithme food [units]`, backed by PlayerEngine `CollectFoodTask` when PlayerEngine is installed.
+- General fuel requests use a dedicated `COLLECT_FUEL` task type and `/staywithme fuel [count]`, backed by PlayerEngine `CollectFuelTask` when PlayerEngine is installed.
+- Explicit furnace smelting requests use `SMELT_ITEM` and `/staywithme smelt <target> [amount]`, backed by PlayerEngine `SmeltInFurnaceTask` for `iron_ingot`, `gold_ingot`, `copper_ingot`, and `charcoal`. Raw ore aliases such as `raw_iron` normalize to the expected output item.
+- Sleep/night requests use `SLEEP_THROUGH_NIGHT`, backed by PlayerEngine `SleepThroughNightTask` when the world is not already daytime.
+- Water and lava safety requests use `GET_OUT_OF_WATER` and `ESCAPE_LAVA`, backed by PlayerEngine `GetOutOfWaterTask` and `EscapeFromLavaTask`.
+- Nearby fire-block requests use `PUT_OUT_FIRE`, backed by PlayerEngine `PutOutFireTask` when available, with a Forge fallback that moves into close reach before extinguishing `FIRE` or `SOUL_FIRE` blocks.
+- Generic get/craft tasks targeting registered mining resources now fall back to the local mining workflow, so broad requests such as `get cobblestone` or `get coal` are not treated as impossible crafting recipes when PlayerEngine is absent.
+- `/staywithme status` reports PlayerEngine runner/chain/acquisition diagnostics, including watchdog states that allow fallback when a PlayerEngine task chain becomes inactive without a finish callback.
+- No-workflow failures for broad acquisition include the last PlayerEngine get status so catalogue misses and controller start failures are visible in game.
+- `/staywithme catalogue [query]` can inspect PlayerEngine TaskCatalogue names and StayWithMe alias resolution in game.
+- `/staywithme mine <resource> [amount]` keeps registered mineral behavior, but unknown targets that PlayerEngine TaskCatalogue can resolve now fall through to broad PlayerEngine acquisition.
+- Local planning now preserves simple requested quantities for fallback `get`, `mine`, `craft`, `smelt`, and wood-collection requests.
 - Mining obeys survival drops: fallback block breaking will not destroy blocks that require a correct tool unless the companion inventory contains a suitable tool, and local fallback block breaking consumes tool durability.
 - Crafting now uses vanilla crafting recipes before falling back to the previous hard-coded workbench path.
 - Runtime recipe catalog now reads the active server RecipeManager, including modded and datapack recipe types.
@@ -450,21 +474,22 @@ Current Forge implementation:
 - Companion memory now has a portable schema with learned resource knowledge and export/import commands, so future worlds can inherit what the companion learned.
 - Stone pickaxe, furnace, iron ingot, and iron pickaxe workflows now exist. They use PlayerEngine/Baritone mining first when available, then local survival fallback for reachable blocks.
 - `/staywithme oreinfo <resource>` now performs async LLM JSON analysis for ore distribution and stores the strategy in memory.
-- `/staywithme mine <resource> [amount]` turns known vanilla resources into executable `ACQUIRE_ITEM` workflows. If the required pickaxe is missing, the workflow now prepends the wooden/stone/iron pickaxe preparation chain before mining. Supported first-pass targets include cobblestone, coal, raw iron, diamond, lapis, redstone, raw gold, emerald, raw copper, and quartz. Unknown modded resources are intentionally left for future resource/pack plugins.
+- `/staywithme mine <resource> [amount]` turns known vanilla resources into executable `ACQUIRE_ITEM` workflows. If the required pickaxe is missing, the workflow now prepends the wooden/stone/iron pickaxe preparation chain before mining. Supported first-pass targets include cobblestone, coal, raw iron, diamond, lapis, redstone, raw gold, emerald, raw copper, and quartz. Unknown targets that PlayerEngine TaskCatalogue can resolve fall through to broad acquisition; unresolved modded resources are still left for future resource/pack plugins.
 - `/staywithme mineplan <resource> [amount]` and `/staywithme expedition <resource> [amount]` now use a `MiningExpeditionPlan` JSON contract. LLM output is limited to high-level strategy; local code remains responsible for survival-safe execution, safety interrupts, descending to the target layer, branch mining, and returning to the player for resupply.
 - `MINING_EXPEDITION` workflows now have `DESCEND_TO_LAYER` and `BRANCH_MINE_RESOURCE` steps. The descent executor makes a staircase instead of digging straight down; the branch executor uses PlayerEngine/Baritone when available and falls back to local two-high tunnel digging.
 - Mining expeditions now remember a supply/entrance point for the current task, set up a supply chest for from-scratch expedition chains, unload non-essential inventory when full, prepare torches for stone/iron-pickaxe expedition chains, place torches in dark tunnels when available, and rotate away from adjacent lava/fluid hazards.
 - Recipes that require a 3x3 grid now use a reachable crafting-table station; workflows such as chest can create and place one first.
 - Workbench, sticks, chest, wooden axe, wooden pickaxe, stone pickaxe, furnace, iron ingot, iron pickaxe, and executable mining tasks now run through a reusable workflow model.
 - Inventory selection now exposes selected slot/main hand behavior for breaking and placing.
-- Place/attack still use the unified interaction provider and survival fallback.
+- Place still uses the unified interaction provider and survival fallback. Nearby hostile attack now prefers PlayerEngine `KillEntityTask` when available, then falls back to the local survival attack loop; continuous protect mode uses PlayerEngine `HeroTask`.
+- Hostile retreat requests use `RETREAT_FROM_HOSTILES`, backed by PlayerEngine `RunAwayFromHostilesTask`, and complete after the companion reaches the requested safe distance.
+- Creeper-specific retreat requests use `RETREAT_FROM_CREEPERS`, backed by PlayerEngine `RunAwayFromCreepersTask` when available, with a simple Forge fallback that moves to a reachable standable block farther from the creeper.
+- Projectile dodge requests use `DODGE_PROJECTILES`, backed by PlayerEngine `DodgeProjectilesTask`, and complete once PlayerEngine reports the companion is safe from tracked projectile paths.
+- Projectile wall requests use `PROJECTILE_PROTECTION_WALL`, backed by PlayerEngine `ProjectileProtectionWallTask`, to place throwaway-block cover against skeleton arrows. Forge fallback currently only completes if no skeleton threat is present; active wall placement remains PlayerEngine-only.
 
 Next steps:
 
-- bind PlayerEngine provider interfaces more deeply without making optional runtime unsafe
-- deepen Baritone mine/place/craft adapters
-- make the descent/branch executors smarter with furnace supply stations, route reuse across sessions, torch spacing control, lava bridging/avoidance, and persistent continuation after reconnect/world reload
-- deepen resource acquisition learning for diamond and modded high-tier resources, using LLM strategy JSON plus observed mining outcomes
-- later add pack-specific `RecipeExecutionPlugin` implementations for processing recipes such as Create mixing, pressing, mechanical crafting, and deploying
-- expand perception into event-based sensing
-- reconnect LLM only as high-level task planning after embodied control is stable
+- Verify PlayerEngine-first smoke tests in game: `crafting_table`, `stone_pickaxe`, `raw_iron`, `/staywithme smelt raw_iron 1`, and `diamond`.
+- Reduce `LocalBehaviorController` into fallback-specific executors instead of expanding it further.
+- Keep StayWithMe expedition memory and safety policy, but prefer PlayerEngine for recursive material acquisition.
+- Add pack/plugin integration only above the PlayerEngine/fallback boundary.

@@ -14,7 +14,7 @@ public final class ModEntities {
             DeferredRegister.create(ForgeRegistries.ENTITY_TYPES, StayWithMeMod.MOD_ID);
 
     public static final RegistryObject<EntityType<FriendEntity>> FRIEND = ENTITIES.register("friend",
-            () -> EntityType.Builder.<FriendEntity>of(FriendEntity::new, MobCategory.CREATURE)
+            () -> EntityType.Builder.<FriendEntity>of(FriendEntityFactory::create, MobCategory.CREATURE)
                     .sized(0.6F, 1.8F)
                     .clientTrackingRange(10)
                     .updateInterval(2)
