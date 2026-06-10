@@ -43,7 +43,7 @@ public class TaskPlanner {
             - COLLECT_BUILDING_MATERIALS: use PlayerEngine's building material task to obtain throwaway route/bridge/scaffold blocks. Target should be "building_materials"; default amount 32.
             - COLLECT_FOOD: collect edible food units for survival. Prefer PlayerEngine's food task when available.
             - COLLECT_MEAT: collect meat food units through PlayerEngine hunting/cooking behavior.
-            - COLLECT_FUEL: collect coal/fuel items for smelting or furnace use through PlayerEngine's fuel task. Target should be "fuel"; default amount 4.
+            - COLLECT_FUEL: collect coal/fuel items for smelting or furnace use. Prefer PlayerEngine's fuel task when available; StayWithMe can fall back to smelting charcoal from logs. Target should be "fuel"; default amount 4.
             - FISH: use PlayerEngine to fish until stopped. This requires a fishing rod or PlayerEngine must obtain/use one.
             - FARM: use PlayerEngine to farm nearby crops within a range. The amount field is the range, default 10.
             - EXPLORE: use PlayerEngine's exploration movement to wander/search outward by a requested distance. Amount is distance, default 48.

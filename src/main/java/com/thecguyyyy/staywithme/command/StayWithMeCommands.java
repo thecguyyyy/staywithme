@@ -466,7 +466,7 @@ public final class StayWithMeCommands {
                 "fuel",
                 count,
                 "Command /staywithme fuel",
-                "Collecting fuel items x" + count + " with PlayerEngine."
+                "Collecting fuel items x" + count + " with PlayerEngine first, charcoal fallback if needed."
         );
     }
 

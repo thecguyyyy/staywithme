@@ -70,10 +70,7 @@ public class PlayerEngineEmbodiedController implements EmbodiedController {
 
     @Override
     public boolean goToBlock(BlockPos pos, double closeEnoughDistance) {
-        if (this.playerEngine.goToBlock(pos, closeEnoughDistance)) {
-            return true;
-        }
-        return EmbodiedController.super.goToBlock(pos, closeEnoughDistance);
+        return this.playerEngine.goToBlock(pos, closeEnoughDistance);
     }
 
     @Override

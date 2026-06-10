@@ -81,8 +81,9 @@ Run these before deep fallback expedition testing:
    - Expect task summaries to show `COLLECT_FOOD`, status to show a PlayerEngine `food:10` acquisition signature, and the task to finish once carried edible food units are sufficient.
    - For meat, expect task summaries to show `COLLECT_MEAT`, status to show a PlayerEngine `meat:10` acquisition signature, and completion only after enough carried meat food units exist.
    - For fuel, expect task summaries to show `COLLECT_FUEL`, status to show a PlayerEngine `fuel:4` acquisition signature, and completion once carried coal or charcoal reaches the requested count.
+   - Disable PlayerEngine or force PlayerEngine fuel collection to fail, then run `/staywithme fuel 2`; expect `workflow=collect_fuel_charcoal...` after fallback activation and verify it collects logs, prepares a furnace, and smelts charcoal until coal/charcoal count satisfies the request.
    - For smelting, expect task summaries to show `SMELT_ITEM`, status to show a PlayerEngine `smelt:<target>:<count>` acquisition signature, and completion only once the output item count is present in the companion inventory.
-   - With PlayerEngine disabled and no carried food/fuel/smelting output, expect a clear failure explaining that broad food, fuel collection, or high-level smelting currently needs PlayerEngine. Asking for a specific item such as `/staywithme get bread 1` or `/staywithme get coal 1` can still use ordinary get/craft behavior.
+   - With PlayerEngine disabled and no carried food or smelting output, expect broad food/meat collection and high-level smelting to fail visibly unless already satisfied. Fuel is the exception: it should run the vanilla charcoal fallback. Asking for a specific item such as `/staywithme get bread 1` or `/staywithme get coal 1` can still use ordinary get/craft behavior.
 
 9. PlayerEngine-only task entries:
    - Run `/staywithme fish` with a fishing rod available or obtainable, then stop it with `/staywithme stop`.
@@ -90,6 +91,7 @@ Run these before deep fallback expedition testing:
    - Run `/staywithme explore 48`; with PlayerEngine loaded, expect status to show `explore:48.0` while `TimeoutWanderTask` explores outward, and completion after it has moved roughly the requested distance.
    - At night, run `/staywithme sleep` or `/staywithme night`; during daytime, the task should complete immediately without starting PlayerEngine work.
    - Put the companion in shallow water and run `/staywithme outofwater` or `/staywithme dryland`; expect task summaries to show `GET_OUT_OF_WATER`, status to show `get_out_of_water`, and completion after it reaches dry ground.
+   - Repeat the shallow-water test with PlayerEngine disabled near reachable shoreline; expect the Forge fallback to move to a nearby dry standable block and complete. In deep water with no reachable dry stand position within about 12 blocks, expect a visible failure.
    - In a controlled safe test world, put the companion in or next to lava/fire and run `/staywithme escapelava`; expect task summaries to show `ESCAPE_LAVA`, status to show `escape_lava`, and completion after it is no longer in lava or on fire.
    - Place a reachable water or lava source at a known coordinate, then run `/staywithme clearliquid <x> <y> <z>`, `/staywithme clearwater <x> <y> <z>`, or `/staywithme clearlava <x> <y> <z>`.
    - Expect task summaries to show `CLEAR_LIQUID`, status to show a PlayerEngine `clear_liquid:x,y,z` signature when PlayerEngine is loaded, and completion once the target fluid state is empty. With PlayerEngine disabled, give the companion cobblestone/dirt/cobbled deepslate/netherrack and verify the limited Forge fallback only succeeds when the liquid is reachable and has an adjacent sturdy placement face.
@@ -98,7 +100,7 @@ Run these before deep fallback expedition testing:
    - Through `/staywithme ask`, try `start fishing`, `farm these crops`, `explore farther`, `sleep through the night`, `swim to shore`, `escape lava`, `clear water at <x> <y> <z>`, `put out fire`, and `equip iron armor`.
    - Expect task summaries to show `FISH`, `FARM`, `EXPLORE`, `SLEEP_THROUGH_NIGHT`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `CLEAR_LIQUID`, `PUT_OUT_FIRE`, or `EQUIP_ARMOR`, and `/staywithme status` to expose the PlayerEngine running signature for tasks that are not already satisfied.
    - After armor completion, visually confirm the companion's actual armor slots changed, not just that PlayerEngine reported callback completion.
-   - With PlayerEngine disabled, expect PlayerEngine-only tasks to fail visibly instead of falling into unrelated local workflows. `PUT_OUT_FIRE` and `EXPLORE` are exceptions: fire uses close-range Forge-native block destruction, and explore picks a deterministic reachable standable target outward from the current position.
+   - With PlayerEngine disabled, expect PlayerEngine-only tasks to fail visibly instead of falling into unrelated local workflows. `GET_OUT_OF_WATER`, `PUT_OUT_FIRE`, and `EXPLORE` are exceptions: water escape moves to a nearby dry stand position, fire uses close-range Forge-native block destruction, and explore picks a deterministic reachable standable target outward from the current position.
 
 10. Nearby hostile combat:
    - Spawn or find one hostile mob near the companion, then run `/staywithme attack`.
@@ -251,6 +253,7 @@ Run these before deep fallback expedition testing:
 
 12. Remote return policy:
    - Put the expedition supply point more than 32 horizontal blocks or 12 vertical blocks from the active mining position, then trigger tool/torch/food resupply.
+   - With PlayerEngine loaded, expect one PlayerEngine `goto:x,y,z:3.0` attempt for the return target before construction recovery starts. If it reports `inactive_without_finish(...)`, finishes away from the target, or makes no block-position progress for about 45 seconds, the same target should not restart `remote_goto` in a loop.
    - Without command permission level 2, expect `construction=...source=direct_remote_construction` and a sequence of validated horizontal tunnels, stairs, shafts/pillars, or bridges.
    - With command permission level 2, expect a direct teleport only to a loaded, standable return target.
    - Remove or block an old remembered crafting table and verify its loaded world state is checked before a replacement is placed.
@@ -265,6 +268,7 @@ Run these before deep fallback expedition testing:
 
 - `supplyStatus`: current high-level expedition phase.
 - `moveWatch`: movement stall label and counter.
+- `remoteGoto`: one-shot PlayerEngine return attempt target, label, active flag, and whether that target has already fallen back to construction recovery.
 - `supplyStock`: loaded supply chest inventory summary.
 - `routeTarget`, `routeWaypoint`, `routeDepth`: remembered route replay state.
 - `travelBreadcrumbs`, `resupplyRoute`, `resumeRoute`: active mining-route recording and resupply return/replay progress.

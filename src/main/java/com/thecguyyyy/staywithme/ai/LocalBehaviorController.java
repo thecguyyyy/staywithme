@@ -127,6 +127,7 @@ public class LocalBehaviorController {
     private static final int REMOTE_CONSTRUCTION_HORIZONTAL_THRESHOLD = 32;
     private static final int REMOTE_CONSTRUCTION_VERTICAL_THRESHOLD = 12;
     private static final int REMOTE_CONSTRUCTION_NO_PROGRESS_SEGMENT_LIMIT = 8;
+    private static final double REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH = 3.0D;
     private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
             Direction.NORTH,
             Direction.EAST,
@@ -296,6 +297,7 @@ public class LocalBehaviorController {
     private BlockPos fireExtinguishTarget;
     private BlockPos exploreTarget;
     private LongTaskWorkflow workflow;
+    private boolean fuelCharcoalFallbackActive;
     private String playerEngineAcquisitionName;
     private int playerEngineAcquisitionAmount;
     private boolean playerEngineAcquisitionAnnounced;
@@ -376,6 +378,7 @@ public class LocalBehaviorController {
         this.expeditionSupplyStatus = "idle";
         this.resetExpeditionMoveWatch();
         this.resetConstructionPathRecovery();
+        this.resetRemotePlayerEngineTravel();
         this.resetBranchPattern();
         this.resetTorchPattern();
         this.resetDescendPlayerEngineAttempt();
@@ -386,6 +389,7 @@ public class LocalBehaviorController {
         this.fireExtinguishTarget = null;
         this.exploreTarget = null;
         this.resetPlayerEngineAcquisitionState();
+        this.fuelCharcoalFallbackActive = false;
         this.workflow = this.createWorkflowFor(task);
         this.applyPendingWorkflowState(task);
         this.interaction.consumeToolBreakEvent();
@@ -566,6 +570,7 @@ public class LocalBehaviorController {
         this.expeditionSupplyStatus = "idle";
         this.resetExpeditionMoveWatch();
         this.resetConstructionPathRecovery();
+        this.resetRemotePlayerEngineTravel();
         this.resetBranchPattern();
         this.resetTorchPattern();
         this.placeTarget = null;
@@ -575,6 +580,7 @@ public class LocalBehaviorController {
         this.fireExtinguishTarget = null;
         this.exploreTarget = null;
         this.workflow = null;
+        this.fuelCharcoalFallbackActive = false;
         this.resetPlayerEngineAcquisitionState();
         this.clearPendingControllerState();
         this.attackCooldownTicks = 0;
@@ -654,6 +660,10 @@ public class LocalBehaviorController {
         boolean saved = false;
         saved |= this.putBlockPos(transientTag, "CraftingStation", this.craftingStationTarget);
         saved |= this.putBlockPos(transientTag, "FurnaceStation", this.furnaceStationTarget);
+        if (this.fuelCharcoalFallbackActive || (task != null && task.type() == FriendTaskType.COLLECT_FUEL)) {
+            transientTag.putBoolean("FuelCharcoalFallbackActive", this.fuelCharcoalFallbackActive);
+            saved = true;
+        }
 
         boolean hasExpeditionState = task != null && task.type() == FriendTaskType.MINING_EXPEDITION
                 || this.expeditionSupplyPoint != null
@@ -869,8 +879,9 @@ public class LocalBehaviorController {
         }
         if (task.type() == FriendTaskType.COLLECT_FUEL
                 && !this.body.canUseHighLevelAcquisition()
-                && this.countCoalEquivalent() < Math.max(1, task.amount())) {
-            return Optional.of("the saved fuel collection task needs PlayerEngine, but PlayerEngine is not available");
+                && this.countCoalEquivalent() < this.fuelAmountForTask(task)
+                && this.createWorkflowFor(task) == null) {
+            return Optional.of("the saved fuel collection task needs PlayerEngine, but no charcoal fallback workflow is available");
         }
         if (task.type() == FriendTaskType.SMELT_ITEM
                 && !this.isSmeltItemSatisfied(task)
@@ -879,7 +890,9 @@ public class LocalBehaviorController {
         }
         if (task.type() == FriendTaskType.GET_OUT_OF_WATER
                 && !this.body.canUseHighLevelAcquisition()
-                && (this.friend.isInWater() || !this.friend.onGround())) {
+                && (this.friend.isInWater() || !this.friend.onGround())
+                && (!(this.friend.level() instanceof ServerLevel serverLevel)
+                || this.findNearestDryStandPosition(serverLevel, 12).isEmpty())) {
             return Optional.of("the saved water escape task needs PlayerEngine, but PlayerEngine is not available");
         }
         if (task.type() == FriendTaskType.ESCAPE_LAVA
@@ -949,6 +962,7 @@ public class LocalBehaviorController {
                 + ", station=" + this.craftingStationSummary()
                 + ", furnace=" + this.furnaceStationSummary()
                 + ", construction=" + this.constructionPathSummary()
+                + ", remoteGoto=" + this.remotePlayerEngineTravelSummary()
                 + ", resourceExplore=" + this.resourceExploreSummary()
                 + ", expedition=" + this.expeditionSummary()
                 + ", workflow=" + this.workflowSummary();
@@ -1364,32 +1378,44 @@ public class LocalBehaviorController {
     }
 
     private void collectFuel(FriendTask task) {
-        int requiredFuelItems = Math.max(1, task == null || task.amount() <= 0 ? 4 : task.amount());
+        int requiredFuelItems = this.fuelAmountForTask(task);
         if (this.countCoalEquivalent() >= requiredFuelItems) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
+            this.fuelCharcoalFallbackActive = false;
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Fuel collection needs PlayerEngine right now; Forge fallback only uses local coal or charcoal when already carried.");
+        if (this.fuelCharcoalFallbackActive) {
+            this.executeFuelCharcoalFallback(task, requiredFuelItems, "continuing charcoal fallback");
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (!this.body.canUseHighLevelAcquisition()) {
+            this.executeFuelCharcoalFallback(task, requiredFuelItems, "PlayerEngine is unavailable");
+            return;
+        }
+        if ("fuel".equals(this.playerEngineAcquisitionName)
                 && this.body.hasFuelCollectionFinished(requiredFuelItems)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.countCoalEquivalent() >= requiredFuelItems) {
                 this.friend.getFriendBrain().completeTask();
             } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine fuel collection finished, but I still do not have enough coal or charcoal.");
+                this.executeFuelCharcoalFallback(
+                        task,
+                        requiredFuelItems,
+                        "PlayerEngine fuel collection finished without enough coal or charcoal"
+                );
             }
             return;
         }
         if (!this.body.collectFuel(requiredFuelItems)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine fuel collection did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
             this.resetPlayerEngineAcquisitionState();
+            this.executeFuelCharcoalFallback(
+                    task,
+                    requiredFuelItems,
+                    "PlayerEngine fuel collection did not start: "
+                            + shortStatus(this.body.highLevelAcquisitionStatus(), 120)
+            );
             return;
         }
         this.playerEngineAcquisitionName = "fuel";
@@ -1399,6 +1425,31 @@ public class LocalBehaviorController {
             this.sayThrottled("Using PlayerEngine to collect fuel items x" + requiredFuelItems + ".");
             this.playerEngineAcquisitionAnnounced = true;
         }
+    }
+
+    private int fuelAmountForTask(FriendTask task) {
+        return Math.max(1, task == null || task.amount() <= 0 ? 4 : task.amount());
+    }
+
+    private void executeFuelCharcoalFallback(FriendTask task, int requiredFuelItems, String reason) {
+        if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
+            return;
+        }
+        this.resetPlayerEngineAcquisitionState();
+        this.fuelCharcoalFallbackActive = true;
+        LongTaskWorkflow expected = WorkflowFactory.collectFuelCharcoal(requiredFuelItems);
+        if (this.workflow == null
+                || !expected.id().equals(this.workflow.id())
+                || expected.stepCount() != this.workflow.stepCount()) {
+            this.workflow = expected;
+        }
+        this.friend.setFriendState(FriendState.EXECUTING_TASK);
+        this.sayThrottled("Using vanilla charcoal fallback for fuel x"
+                + requiredFuelItems
+                + " ("
+                + reason
+                + ").");
+        this.executeWorkflow(serverLevel, task);
     }
 
     private void smeltItem(FriendTask task) {
@@ -1613,6 +1664,9 @@ public class LocalBehaviorController {
     }
 
     private void getOutOfWater() {
+        if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
+            return;
+        }
         if (!this.friend.isInWater() && this.friend.onGround()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -1620,7 +1674,10 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Getting out of water needs PlayerEngine right now; Forge fallback does not implement swimming-to-shore recovery.");
+            if (this.tryForgeGetOutOfWater(serverLevel)) {
+                return;
+            }
+            this.friend.getFriendBrain().failTask("I cannot find a dry reachable stand position nearby.");
             return;
         }
         if (this.playerEngineAcquisitionName != null && this.body.hasGetOutOfWaterFinished()) {
@@ -1628,15 +1685,21 @@ public class LocalBehaviorController {
             if (!this.friend.isInWater() && this.friend.onGround()) {
                 this.friend.getFriendBrain().completeTask();
             } else {
+                if (this.tryForgeGetOutOfWater(serverLevel)) {
+                    return;
+                }
                 this.friend.getFriendBrain().failTask("PlayerEngine water escape finished, but I am still not safely on dry ground.");
             }
             return;
         }
         if (!this.body.getOutOfWater()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine water escape did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
+            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
+            if (this.tryForgeGetOutOfWater(serverLevel)) {
+                this.sayThrottled("PlayerEngine water escape did not start (" + status + "), so I am using a local dry-ground fallback.");
+                return;
+            }
+            this.friend.getFriendBrain().failTask("PlayerEngine water escape did not start: " + status + ".");
             return;
         }
         this.playerEngineAcquisitionName = "get_out_of_water";
@@ -1646,6 +1709,41 @@ public class LocalBehaviorController {
             this.sayThrottled("Using PlayerEngine to get out of water.");
             this.playerEngineAcquisitionAnnounced = true;
         }
+    }
+
+    private boolean tryForgeGetOutOfWater(ServerLevel level) {
+        Optional<BlockPos> target = this.findNearestDryStandPosition(level, 12);
+        if (target.isEmpty()) {
+            return false;
+        }
+        this.body.moveToNearby(target.get(), TASK_SPEED);
+        this.friend.setFriendState(FriendState.EXECUTING_TASK);
+        this.sayThrottled("Moving to dry ground at " + this.formatPos(target.get()) + ".");
+        return true;
+    }
+
+    private Optional<BlockPos> findNearestDryStandPosition(ServerLevel level, int radius) {
+        BlockPos origin = this.friend.blockPosition();
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        int searchRadius = Math.max(1, radius);
+        for (int y = -4; y <= 6; y++) {
+            for (int x = -searchRadius; x <= searchRadius; x++) {
+                for (int z = -searchRadius; z <= searchRadius; z++) {
+                    BlockPos candidate = origin.offset(x, y, z);
+                    if (!this.canStandAt(level, candidate)
+                            || !this.canNavigateToStandPosition(candidate)) {
+                        continue;
+                    }
+                    double distance = origin.distSqr(candidate);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        best = candidate.immutable();
+                    }
+                }
+            }
+        }
+        return Optional.ofNullable(best);
     }
 
     private void escapeLava() {
@@ -2765,6 +2863,9 @@ public class LocalBehaviorController {
                     .map(target -> this.createMiningExpeditionWorkflow(task, target, Math.max(1, task.amount())))
                     .orElse(null);
         }
+        if (task.type() == FriendTaskType.COLLECT_FUEL) {
+            return WorkflowFactory.collectFuelCharcoal(this.fuelAmountForTask(task));
+        }
 
         return switch (task.type()) {
             case MAKE_CRAFTING_TABLE -> WorkflowFactory.craftingTable();
@@ -2825,7 +2926,7 @@ public class LocalBehaviorController {
 
     private boolean isWorkflowTask(FriendTaskType type) {
         return switch (type) {
-            case GET_ITEM, CRAFT_ITEM, MAKE_CRAFTING_TABLE, MAKE_STICKS, MAKE_CHEST, MAKE_WOODEN_AXE, MAKE_WOODEN_PICKAXE,
+            case GET_ITEM, CRAFT_ITEM, COLLECT_FUEL, MAKE_CRAFTING_TABLE, MAKE_STICKS, MAKE_CHEST, MAKE_WOODEN_AXE, MAKE_WOODEN_PICKAXE,
                  MAKE_STONE_PICKAXE, MAKE_FURNACE, MAKE_IRON_INGOT, MAKE_IRON_PICKAXE, MINE_RESOURCE,
                  MINING_EXPEDITION -> true;
             default -> false;
@@ -2852,6 +2953,12 @@ public class LocalBehaviorController {
                 || this.pendingRestoredWorkflowStepCount == this.workflow.stepCount())
                 && this.pendingControllerTaskMatches(task)) {
             this.workflow.restoreCurrentIndex(this.pendingRestoredWorkflowIndex);
+            if (task != null
+                    && task.type() == FriendTaskType.COLLECT_FUEL
+                    && this.pendingRestoredTransientState != null
+                    && this.pendingRestoredTransientState.getBoolean("FuelCharcoalFallbackActive")) {
+                this.fuelCharcoalFallbackActive = true;
+            }
         }
     }
 
@@ -3213,25 +3320,185 @@ public class LocalBehaviorController {
         if (target == null) {
             this.resetExpeditionMoveWatch();
             this.resetConstructionPathRecovery();
+            this.resetRemotePlayerEngineTravel();
             return ConstructionTravelResult.FAILED;
         }
         if (this.friend.blockPosition().distSqr(target) <= 9.0D) {
             this.resetExpeditionMoveWatch();
             this.resetConstructionPathRecovery();
+            this.resetRemotePlayerEngineTravel();
             return ConstructionTravelResult.COMPLETE;
         }
 
         boolean remote = !level.hasChunkAt(target) || this.isRemoteConstructionDestination(target);
         boolean ordinaryRouteAvailable = !remote && this.canNavigateToStandPosition(target);
-        if (!ordinaryRouteAvailable || this.isExpeditionMoveStalled(target, label)) {
+        boolean moveStalled = this.isExpeditionMoveStalled(target, label);
+        if (!ordinaryRouteAvailable || moveStalled) {
+            Optional<ConstructionTravelResult> playerEngineTravel = this.tickRemotePlayerEngineTravel(target, label, moveStalled);
+            if (playerEngineTravel.isPresent()) {
+                return playerEngineTravel.get();
+            }
             this.body.stop();
             this.resetExpeditionMoveWatch();
             return this.tickConstructionTravel(level, target, label);
         }
 
         this.resetConstructionPathRecovery();
+        this.resetRemotePlayerEngineTravel();
         this.body.moveTo(target, TASK_SPEED);
         return ConstructionTravelResult.WORKING;
+    }
+
+    private Optional<ConstructionTravelResult> tickRemotePlayerEngineTravel(BlockPos target, String label, boolean moveStalled) {
+        if (!this.body.canUseHighLevelAcquisition()) {
+            if ("remote_goto".equals(this.playerEngineAcquisitionName)) {
+                this.resetPlayerEngineAcquisitionState();
+                this.remotePlayerEngineTravelAttempted = true;
+            }
+            return Optional.empty();
+        }
+        if (this.isConstructionMaterialRestockActive()
+                || (this.playerEngineAcquisitionName != null
+                && !"remote_goto".equals(this.playerEngineAcquisitionName))) {
+            return Optional.empty();
+        }
+
+        String normalizedLabel = this.normalizedRemotePlayerEngineTravelLabel(label);
+        if (!this.isSameRemotePlayerEngineTravel(target, normalizedLabel)) {
+            if ("remote_goto".equals(this.playerEngineAcquisitionName)) {
+                this.body.stop();
+                this.resetPlayerEngineAcquisitionState();
+            }
+            this.resetRemotePlayerEngineTravel();
+            this.remotePlayerEngineTravelTarget = target.immutable();
+            this.remotePlayerEngineTravelLabel = normalizedLabel;
+        }
+
+        if ("remote_goto".equals(this.playerEngineAcquisitionName)) {
+            String status = this.body.highLevelAcquisitionStatus();
+            if (this.body.hasGoToBlockFinished(target, REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH)
+                    || this.isRemotePlayerEngineGoToFinished(target, status)) {
+                this.body.stop();
+                this.resetPlayerEngineAcquisitionState();
+                if (this.friend.blockPosition().distSqr(target) <= 9.0D) {
+                    this.resetRemotePlayerEngineTravel();
+                    this.resetConstructionPathRecovery();
+                    return Optional.of(ConstructionTravelResult.COMPLETE);
+                }
+                this.remotePlayerEngineTravelAttempted = true;
+                this.sayThrottled(
+                        "PlayerEngine goto finished away from "
+                                + normalizedLabel
+                                + "; falling back to route construction. status="
+                                + shortStatus(status, 120)
+                                + "."
+                );
+                return Optional.empty();
+            }
+
+            if (moveStalled) {
+                this.resetPlayerEngineAcquisitionState();
+                this.remotePlayerEngineTravelAttempted = true;
+                this.sayThrottled(
+                        "PlayerEngine goto to "
+                                + normalizedLabel
+                                + " stopped making progress; falling back to route construction. status="
+                                + shortStatus(status, 120)
+                                + "."
+                );
+                return Optional.empty();
+            }
+
+            if (this.isRemotePlayerEngineGoToInactive(target, status)
+                    || !this.isRemotePlayerEngineGoToActive(target, status)) {
+                this.resetPlayerEngineAcquisitionState();
+                this.remotePlayerEngineTravelAttempted = true;
+                this.sayThrottled(
+                        "PlayerEngine could not keep a goto route to "
+                                + normalizedLabel
+                                + "; falling back to route construction. status="
+                                + shortStatus(status, 120)
+                                + "."
+                );
+                return Optional.empty();
+            }
+            this.friend.setFriendState(FriendState.RETURNING);
+            return Optional.of(ConstructionTravelResult.WORKING);
+        }
+
+        if (this.remotePlayerEngineTravelAttempted) {
+            return Optional.empty();
+        }
+
+        if (!this.body.goToBlock(target, REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH)) {
+            this.remotePlayerEngineTravelAttempted = true;
+            this.sayThrottled(
+                    "PlayerEngine could not start goto for "
+                            + normalizedLabel
+                            + "; falling back to route construction."
+            );
+            return Optional.empty();
+        }
+
+        this.playerEngineAcquisitionName = "remote_goto";
+        this.playerEngineAcquisitionAmount = 0;
+        this.playerEngineAcquisitionAnnounced = true;
+        this.friend.setFriendState(FriendState.RETURNING);
+        this.sayThrottled(
+                "Using PlayerEngine goto for "
+                        + normalizedLabel
+                        + " before constructing a route."
+        );
+        return Optional.of(ConstructionTravelResult.WORKING);
+    }
+
+    private boolean isSameRemotePlayerEngineTravel(BlockPos target, String label) {
+        return this.remotePlayerEngineTravelTarget != null
+                && this.remotePlayerEngineTravelTarget.equals(target)
+                && Objects.equals(this.remotePlayerEngineTravelLabel, label);
+    }
+
+    private String normalizedRemotePlayerEngineTravelLabel(String label) {
+        if (label == null || label.isBlank()) {
+            return "destination";
+        }
+        return label.trim();
+    }
+
+    private boolean isRemotePlayerEngineGoToActive(BlockPos target, String status) {
+        if (status == null || !status.contains(this.remotePlayerEngineGoToNeedle(target))) {
+            return false;
+        }
+        return status.startsWith("started(") || status.startsWith("running(");
+    }
+
+    private boolean isRemotePlayerEngineGoToFinished(BlockPos target, String status) {
+        if (status == null || !status.contains(this.remotePlayerEngineGoToNeedle(target))) {
+            return false;
+        }
+        return status.startsWith("callback_finished(") || status.startsWith("already_satisfied(");
+    }
+
+    private boolean isRemotePlayerEngineGoToInactive(BlockPos target, String status) {
+        return status != null
+                && status.startsWith("inactive_without_finish(")
+                && status.contains(this.remotePlayerEngineGoToNeedle(target));
+    }
+
+    private String remotePlayerEngineGoToNeedle(BlockPos target) {
+        return "goto:"
+                + target.getX()
+                + ","
+                + target.getY()
+                + ","
+                + target.getZ()
+                + ":";
+    }
+
+    private void resetRemotePlayerEngineTravel() {
+        this.remotePlayerEngineTravelTarget = null;
+        this.remotePlayerEngineTravelLabel = "none";
+        this.remotePlayerEngineTravelAttempted = false;
     }
 
     private void recordExpeditionTravelBreadcrumb(ServerLevel level, FriendTask task) {
@@ -9707,6 +9974,9 @@ public class LocalBehaviorController {
             Predicate<ItemStack> matcher = this.recipeMatcherFor(task.target());
             return this.friend.countInventoryItems(matcher) >= Math.max(1, task.amount());
         }
+        if (task != null && task.type() == FriendTaskType.COLLECT_FUEL) {
+            return this.countCoalEquivalent() >= this.fuelAmountForTask(task);
+        }
         if (task != null
                 && (task.type() == FriendTaskType.MINE_RESOURCE || task.type() == FriendTaskType.MINING_EXPEDITION)
                 && task.target() != null
@@ -9731,6 +10001,11 @@ public class LocalBehaviorController {
     }
 
     private String workflowSummary() {
+        if (this.workflow != null
+                && "collect_fuel_charcoal".equals(this.workflow.id())
+                && !this.fuelCharcoalFallbackActive) {
+            return "collect_fuel_charcoal: standby";
+        }
         return this.workflow == null ? "none" : this.workflow.summary();
     }
 
@@ -9833,6 +10108,22 @@ public class LocalBehaviorController {
 
     private String furnaceStationSummary() {
         return this.furnaceStationTarget == null ? "none" : this.formatPos(this.furnaceStationTarget);
+    }
+
+    private String remotePlayerEngineTravelSummary() {
+        if (this.remotePlayerEngineTravelTarget == null
+                && !this.remotePlayerEngineTravelAttempted
+                && !"remote_goto".equals(this.playerEngineAcquisitionName)) {
+            return "none";
+        }
+        return "target="
+                + this.formatPos(this.remotePlayerEngineTravelTarget)
+                + ",label="
+                + this.remotePlayerEngineTravelLabel
+                + ",attempted="
+                + this.remotePlayerEngineTravelAttempted
+                + ",active="
+                + "remote_goto".equals(this.playerEngineAcquisitionName);
     }
 
     private String resourceExploreSummary() {

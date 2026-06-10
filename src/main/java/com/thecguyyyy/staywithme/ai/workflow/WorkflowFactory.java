@@ -315,6 +315,10 @@ public final class WorkflowFactory {
         );
     }
 
+    public static LongTaskWorkflow collectFuelCharcoal(int amount) {
+        return new LongTaskWorkflow("collect_fuel_charcoal", charcoalRecovery(amount));
+    }
+
     private static String workflowSafeTarget(String target) {
         return target == null ? "unknown" : target.replace(':', '_').replace('/', '_');
     }
