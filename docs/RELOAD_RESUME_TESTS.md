@@ -35,7 +35,7 @@ Run `.\gradlew.bat build` before packaging/testing.
    - `COLLECT_FUEL` restarts PlayerEngine-first when available. If it had already activated charcoal fallback before reload, `workflow=collect_fuel_charcoal...` should resume from the saved workflow index.
    - `SMELT_ITEM` resumes as PlayerEngine `SmeltInFurnaceTask` for the saved output target and completes only after the output item count is present.
    - `CLEAR_LIQUID` resumes against the saved `x,y,z` coordinate and completes only once that coordinate's fluid state is empty.
-   - If PlayerEngine is unavailable after reload, `GET_ITEM` falls back to any rebuildable Forge workflow, `COLLECT_FUEL` falls back to the vanilla charcoal workflow, `GET_OUT_OF_WATER` falls back to a nearby dry reachable stand position, `CLEAR_LIQUID` can only continue through the limited reachable-liquid block-placement fallback or already-cleared state, `PUT_OUT_FIRE` falls back to close-range Forge-native extinguishing, `RETREAT_FROM_CREEPERS` falls back to a reachable local retreat point, and `PROJECTILE_PROTECTION_WALL` completes only if no skeleton threat remains, while `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`/`COLLECT_MEAT`, `SMELT_ITEM`, `ESCAPE_LAVA`, `RETREAT_FROM_HOSTILES`, and `DODGE_PROJECTILES` fail visibly unless the current state already satisfies the request.
+   - If PlayerEngine is unavailable after reload, `GET_ITEM` falls back to any rebuildable Forge workflow, `COLLECT_FUEL` falls back to the vanilla charcoal workflow, `GET_OUT_OF_WATER` falls back to a nearby dry reachable stand position, `ESCAPE_LAVA` falls back to nearby reachable lava-safe ground, `CLEAR_LIQUID` can only continue through the limited reachable-liquid block-placement fallback or already-cleared state, `PUT_OUT_FIRE` falls back to close-range Forge-native extinguishing, `RETREAT_FROM_HOSTILES`/`RETREAT_FROM_CREEPERS` fall back to reachable local retreat points, `DODGE_PROJECTILES` falls back to a reachable local sidestep/retreat point, and `PROJECTILE_PROTECTION_WALL` completes if no skeleton threat remains or places local carried-block cover when possible, while `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`/`COLLECT_MEAT`, and `SMELT_ITEM` fail visibly unless the current state already satisfies the request.
 
 ## Movement Task Resume
 
@@ -57,8 +57,8 @@ Run `.\gradlew.bat build` before packaging/testing.
    - `FISH`, `FARM`, and `PROTECT_PLAYER` restart as continuous PlayerEngine tasks and should be stopped explicitly.
    - `EXPLORE` restarts with PlayerEngine when available; without PlayerEngine it should choose a reachable deterministic fallback target instead of failing immediately.
    - `SLEEP_THROUGH_NIGHT` restarts while it is still nighttime and completes immediately if the world is already daytime after reload.
-   - `EQUIP_ARMOR` completes once the requested armor is equipped or PlayerEngine reports completion.
-   - If PlayerEngine is unavailable after reload, validation rejects the saved task with a visible PlayerEngine-required message instead of attempting a Forge-native fallback.
+   - `EQUIP_ARMOR` completes once the requested armor is physically equipped. If PlayerEngine reports completion but the armor slot is still wrong, Forge fallback may equip carried matching armor before completion.
+   - If PlayerEngine is unavailable after reload, validation rejects broad PlayerEngine-only tasks with a visible PlayerEngine-required message instead of attempting unrelated Forge-native work. `EXPLORE` can still choose a reachable deterministic fallback target, and `EQUIP_ARMOR` can resume only when the requested armor is already equipped or carried.
 
 ## Expedition Resume
 

@@ -49,10 +49,10 @@ public class TaskPlanner {
             - EXPLORE: use PlayerEngine's exploration movement to wander/search outward by a requested distance. Amount is distance, default 48.
             - SLEEP_THROUGH_NIGHT: use PlayerEngine to obtain/place/use a bed and sleep until daytime.
             - GET_OUT_OF_WATER: use PlayerEngine to leave water and reach dry ground.
-            - ESCAPE_LAVA: use PlayerEngine to escape lava or fire danger.
+            - ESCAPE_LAVA: use PlayerEngine to escape lava or fire danger; if PlayerEngine is unavailable, local code can move to nearby reachable lava-safe ground.
             - CLEAR_LIQUID: use PlayerEngine's ClearLiquidTask to remove water or lava at a concrete coordinate. Target must be "x,y,z".
             - PUT_OUT_FIRE: use PlayerEngine's PutOutFireTask to extinguish nearby fire or soul fire blocks. Amount is scan range, default 8.
-            - EQUIP_ARMOR: use PlayerEngine to obtain and equip armor. Target can be a material set such as iron, diamond, netherite, or a specific armor item id.
+            - EQUIP_ARMOR: use PlayerEngine to obtain and equip armor; if PlayerEngine is unavailable, local code can equip matching armor already in inventory. Target can be a material set such as iron, diamond, netherite, or a specific armor item id.
             - GET_ITEM: obtain a vanilla item or PlayerEngine TaskCatalogue-style target such as torch, log, planks, raw_iron, cobblestone, or minecraft:oak_log. PlayerEngine may recursively gather ingredients when available; Forge-native mining/crafting remains fallback for supported targets.
             - PICKUP_DROPPED_ITEM: pick up already-dropped item entities only, such as dropped torch, cobblestone, or minecraft:oak_log. Do not mine, craft, or recursively gather missing ingredients for this action.
             - GIVE_ITEM: use PlayerEngine to obtain a specific item and give/drop it to the player. Use explicit item targets such as bread, torch, cobblestone, or minecraft:oak_log.
@@ -74,8 +74,8 @@ public class TaskPlanner {
             - PROTECT_PLAYER: use PlayerEngine HeroTask to continuously clean up hostile mobs and hostile drops nearby until stopped.
             - RETREAT_FROM_HOSTILES: use PlayerEngine to run away from nearby hostile mobs until a safe distance is reached. Amount is distance, default 16.
             - RETREAT_FROM_CREEPERS: use PlayerEngine's creeper-specific safety pathing to run away from creepers. Amount is distance, default 10.
-            - DODGE_PROJECTILES: use PlayerEngine to dodge incoming arrows or projectiles until safe. Amount is horizontal safety distance, default 4.
-            - PROJECTILE_PROTECTION_WALL: use PlayerEngine to place a throwaway block wall against skeleton arrows. Amount is skeleton scan range, default 16.
+            - DODGE_PROJECTILES: use PlayerEngine to dodge incoming arrows or projectiles until safe; if PlayerEngine is unavailable, local code can sidestep incoming projectiles or retreat from an aiming skeleton. Amount is horizontal safety distance, default 4.
+            - PROJECTILE_PROTECTION_WALL: use PlayerEngine to place a throwaway block wall against skeleton arrows; if PlayerEngine is unavailable, local code can place simple carried-block cover. Amount is skeleton scan range, default 16.
             - RETURN_TO_PLAYER: return to the player without permanently following.
             - UNKNOWN: the request cannot be mapped to one currently executable action.
 

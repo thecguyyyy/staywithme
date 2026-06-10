@@ -92,15 +92,15 @@ Run these before deep fallback expedition testing:
    - At night, run `/staywithme sleep` or `/staywithme night`; during daytime, the task should complete immediately without starting PlayerEngine work.
    - Put the companion in shallow water and run `/staywithme outofwater` or `/staywithme dryland`; expect task summaries to show `GET_OUT_OF_WATER`, status to show `get_out_of_water`, and completion after it reaches dry ground.
    - Repeat the shallow-water test with PlayerEngine disabled near reachable shoreline; expect the Forge fallback to move to a nearby dry standable block and complete. In deep water with no reachable dry stand position within about 12 blocks, expect a visible failure.
-   - In a controlled safe test world, put the companion in or next to lava/fire and run `/staywithme escapelava`; expect task summaries to show `ESCAPE_LAVA`, status to show `escape_lava`, and completion after it is no longer in lava or on fire.
+   - In a controlled safe test world, put the companion in or next to lava/fire and run `/staywithme escapelava`; expect task summaries to show `ESCAPE_LAVA`, status to show `escape_lava`, and completion after it is no longer in lava or on fire. With PlayerEngine disabled near safe reachable ground, expect the Forge fallback to move to a nearby lava-safe stand position; with no reachable safe stand position within about 12 blocks, expect a visible failure.
    - Place a reachable water or lava source at a known coordinate, then run `/staywithme clearliquid <x> <y> <z>`, `/staywithme clearwater <x> <y> <z>`, or `/staywithme clearlava <x> <y> <z>`.
    - Expect task summaries to show `CLEAR_LIQUID`, status to show a PlayerEngine `clear_liquid:x,y,z` signature when PlayerEngine is loaded, and completion once the target fluid state is empty. With PlayerEngine disabled, give the companion cobblestone/dirt/cobbled deepslate/netherrack and verify the limited Forge fallback only succeeds when the liquid is reachable and has an adjacent sturdy placement face.
    - Place an ordinary fire or soul fire block near the companion, then run `/staywithme putoutfire 8` or `/staywithme extinguish 8`; expect task summaries to show `PUT_OUT_FIRE`, status to show a PlayerEngine `put_out_fire:x,y,z` signature when PlayerEngine is loaded, and completion once nearby fire blocks are gone.
    - Run `/staywithme equiparmor iron`, `/staywithme equiparmor diamond`, or `/staywithme equiparmor minecraft:iron_chestplate`.
    - Through `/staywithme ask`, try `start fishing`, `farm these crops`, `explore farther`, `sleep through the night`, `swim to shore`, `escape lava`, `clear water at <x> <y> <z>`, `put out fire`, and `equip iron armor`.
    - Expect task summaries to show `FISH`, `FARM`, `EXPLORE`, `SLEEP_THROUGH_NIGHT`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `CLEAR_LIQUID`, `PUT_OUT_FIRE`, or `EQUIP_ARMOR`, and `/staywithme status` to expose the PlayerEngine running signature for tasks that are not already satisfied.
-   - After armor completion, visually confirm the companion's actual armor slots changed, not just that PlayerEngine reported callback completion.
-   - With PlayerEngine disabled, expect PlayerEngine-only tasks to fail visibly instead of falling into unrelated local workflows. `GET_OUT_OF_WATER`, `PUT_OUT_FIRE`, and `EXPLORE` are exceptions: water escape moves to a nearby dry stand position, fire uses close-range Forge-native block destruction, and explore picks a deterministic reachable standable target outward from the current position.
+   - After armor completion, visually confirm the companion's actual armor slots changed, not just that PlayerEngine reported callback completion. With PlayerEngine disabled and matching armor already in the companion inventory, expect Forge fallback to equip it; if pieces are missing, expect a visible PlayerEngine-required failure.
+   - With PlayerEngine disabled, expect PlayerEngine-only tasks to fail visibly instead of falling into unrelated local workflows. `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `PUT_OUT_FIRE`, `EXPLORE`, and carried `EQUIP_ARMOR` are exceptions: water escape moves to a nearby dry stand position, lava escape moves to nearby reachable lava-safe ground, fire uses close-range Forge-native block destruction, explore picks a deterministic reachable standable target outward from the current position, and armor equip can wear matching carried armor only.
 
 10. Nearby hostile combat:
    - Spawn or find one hostile mob near the companion, then run `/staywithme attack`.
@@ -113,7 +113,7 @@ Run these before deep fallback expedition testing:
    - Through `/staywithme ask`, try `retreat from the monsters`, `flee`, or `run away from hostiles`.
    - With PlayerEngine loaded, expect task summaries to show `RETREAT_FROM_HOSTILES` and status to show a PlayerEngine `retreat_hostiles:16.0` high-level signature while `RunAwayFromHostilesTask` moves away.
    - Expect the task to complete once no hostile remains within the requested distance.
-   - With PlayerEngine disabled and a hostile still nearby, expect a visible PlayerEngine-required failure.
+   - With PlayerEngine disabled and a hostile still nearby, expect the Forge fallback to move to a reachable standable block outside the requested hostile distance, or fail visibly if no safe local retreat point exists.
    - Spawn a creeper near the companion, then run `/staywithme creeperretreat 10` or `/staywithme fleecreeper 10`.
    - Through `/staywithme ask`, try `flee creeper` or `avoid creepers`.
    - With PlayerEngine loaded, expect task summaries to show `RETREAT_FROM_CREEPERS` and status to show a PlayerEngine `retreat_creepers:10.0` high-level signature while `RunAwayFromCreepersTask` picks a creeper-safe path.
@@ -121,11 +121,11 @@ Run these before deep fallback expedition testing:
    - Fire arrows or spawn a skeleton so tracked projectiles pass near the companion, then run `/staywithme dodge 4`.
    - Through `/staywithme ask`, try `dodge arrows` or `avoid incoming projectiles`.
    - With PlayerEngine loaded, expect task summaries to show `DODGE_PROJECTILES` and status to show a PlayerEngine `dodge_projectiles:4.0:3.0` high-level signature while `DodgeProjectilesTask` moves to a safe block.
-   - With no tracked projectiles nearby, the task may complete immediately.
+   - With no tracked projectiles nearby, the task may complete immediately. With PlayerEngine disabled, expect a local sidestep away from incoming projectile paths or a retreat from the nearest line-of-sight skeleton, or a visible failure if no reachable dodge point exists.
    - Spawn an angry skeleton with line of sight to the companion, give the companion at least one throwaway block, then run `/staywithme projectilewall 16` or `/staywithme arrowwall 16`.
    - Through `/staywithme ask`, try `block arrows` or `build an arrow wall`.
    - With PlayerEngine loaded, expect task summaries to show `PROJECTILE_PROTECTION_WALL` and status to show a PlayerEngine `projectile_wall` high-level signature while `ProjectileProtectionWallTask` places cover.
-   - With PlayerEngine disabled and a skeleton threat still present, expect a visible PlayerEngine-required failure; with no skeleton threat, the task should complete immediately.
+   - With PlayerEngine disabled, expect carried cobblestone, cobbled deepslate, dirt, or netherrack to be placed as simple local cover between the companion and the nearest line-of-sight skeleton, or a visible failure if no reachable cover placement exists; with no skeleton threat, the task should complete immediately.
    - Spawn or find several hostile mobs or hostile drops near the companion, then run `/staywithme protect` or `/staywithme hero`.
    - Through `/staywithme ask`, try `protect me`, `guard me`, or `keep watch`.
    - With PlayerEngine loaded, expect task summaries to show `PROTECT_PLAYER` and status to show a PlayerEngine `protect_player` high-level signature while `HeroTask` searches, attacks hostiles, and picks hostile drops.

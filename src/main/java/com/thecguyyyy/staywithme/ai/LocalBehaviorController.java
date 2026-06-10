@@ -40,10 +40,14 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Skeleton;
+import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.food.FoodProperties;
+import net.minecraft.world.item.ArmorItem;
 import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameRules;
@@ -897,22 +901,40 @@ public class LocalBehaviorController {
         }
         if (task.type() == FriendTaskType.ESCAPE_LAVA
                 && !this.body.canUseHighLevelAcquisition()
-                && (this.friend.isInLava() || this.friend.isOnFire())) {
-            return Optional.of("the saved lava escape task needs PlayerEngine, but PlayerEngine is not available");
+                && (this.friend.isInLava() || this.friend.isOnFire())
+                && (!(this.friend.level() instanceof ServerLevel serverLevel)
+                || this.findNearestLavaSafeStandPosition(serverLevel, 12).isEmpty())) {
+            return Optional.of("the saved lava escape task needs PlayerEngine, but no local lava-safe stand position is reachable");
         }
         if (task.type() == FriendTaskType.RETREAT_FROM_HOSTILES
-                && !this.body.canUseHighLevelAcquisition()
-                && this.friend.getPerception().nearestHostile(Math.max(4, task.amount() <= 0 ? 16 : task.amount())).isPresent()) {
-            return Optional.of("the saved hostile-retreat task needs PlayerEngine, but PlayerEngine is not available");
+                && !this.body.canUseHighLevelAcquisition()) {
+            int distance = Math.max(4, task.amount() <= 0 ? 16 : task.amount());
+            Optional<LivingEntity> hostile = this.friend.getPerception().nearestHostile(distance);
+            if (hostile.isPresent()
+                    && (!(this.friend.level() instanceof ServerLevel serverLevel)
+                    || this.findThreatRetreatStandPos(serverLevel, hostile.get(), distance).isEmpty())) {
+                return Optional.of("the saved hostile-retreat task needs PlayerEngine, but no local retreat point is reachable");
+            }
         }
         if (task.type() == FriendTaskType.DODGE_PROJECTILES
                 && !this.body.canUseHighLevelAcquisition()) {
-            return Optional.of("the saved projectile-dodge task needs PlayerEngine, but PlayerEngine is not available");
+            int horizontalDistance = Math.max(1, task.amount() <= 0 ? 4 : task.amount());
+            int verticalDistance = 3;
+            if (this.hasLocalProjectileDodgeThreat(horizontalDistance, verticalDistance)
+                    && this.findLocalProjectileDodgeTarget(horizontalDistance, verticalDistance).isEmpty()) {
+                return Optional.of("the saved projectile-dodge task needs PlayerEngine or a reachable local dodge target");
+            }
         }
         if (task.type() == FriendTaskType.PROJECTILE_PROTECTION_WALL
-                && !this.body.canUseHighLevelAcquisition()
-                && this.hasNearbySkeletonThreat(Math.max(4, task.amount() <= 0 ? 16 : task.amount()))) {
-            return Optional.of("the saved projectile-wall task needs PlayerEngine, but PlayerEngine is not available");
+                && !this.body.canUseHighLevelAcquisition()) {
+            int range = Math.max(4, task.amount() <= 0 ? 16 : task.amount());
+            Optional<Skeleton> skeleton = this.nearestSkeletonThreat(range);
+            if (skeleton.isPresent()
+                    && (!(this.friend.level() instanceof ServerLevel serverLevel)
+                    || this.expeditionFloorRepairBlockToPlace(task) == null
+                    || this.findProjectileWallPlaceTarget(serverLevel, skeleton.get()).isEmpty())) {
+                return Optional.of("the saved projectile-wall task needs PlayerEngine or a reachable local wall placement with a carried throwaway block");
+            }
         }
         if (task.type() == FriendTaskType.PICKUP_DROPPED_ITEM
                 && !this.isPickupDroppedItemSatisfied(task)
@@ -929,10 +951,14 @@ public class LocalBehaviorController {
                 || task.type() == FriendTaskType.SLEEP_THROUGH_NIGHT
                 || task.type() == FriendTaskType.GIVE_ITEM
                 || task.type() == FriendTaskType.DEPOSIT_INVENTORY
-                || task.type() == FriendTaskType.EQUIP_ARMOR
                 || task.type() == FriendTaskType.PROTECT_PLAYER)
                 && !this.body.canUseHighLevelAcquisition()) {
             return Optional.of("the saved task needs PlayerEngine, but PlayerEngine is not available");
+        }
+        if (task.type() == FriendTaskType.EQUIP_ARMOR
+                && !this.body.canUseHighLevelAcquisition()
+                && !this.canForgeEquipCarriedArmor(task.target() == null || task.target().isBlank() ? "iron" : task.target())) {
+            return Optional.of("the saved armor equip task needs PlayerEngine to obtain missing armor");
         }
         if (this.isWorkflowTask(task.type()) && this.createWorkflowFor(task) == null) {
             if ((task.type() == FriendTaskType.GET_ITEM || task.type() == FriendTaskType.CRAFT_ITEM)
@@ -1723,16 +1749,27 @@ public class LocalBehaviorController {
     }
 
     private Optional<BlockPos> findNearestDryStandPosition(ServerLevel level, int radius) {
+        return this.findNearestReachableStandPosition(level, radius, -4, 6, pos -> true);
+    }
+
+    private Optional<BlockPos> findNearestReachableStandPosition(
+            ServerLevel level,
+            int radius,
+            int minYOffset,
+            int maxYOffset,
+            Predicate<BlockPos> extraCheck
+    ) {
         BlockPos origin = this.friend.blockPosition();
         BlockPos best = null;
         double bestDistance = Double.MAX_VALUE;
         int searchRadius = Math.max(1, radius);
-        for (int y = -4; y <= 6; y++) {
+        for (int y = minYOffset; y <= maxYOffset; y++) {
             for (int x = -searchRadius; x <= searchRadius; x++) {
                 for (int z = -searchRadius; z <= searchRadius; z++) {
                     BlockPos candidate = origin.offset(x, y, z);
                     if (!this.canStandAt(level, candidate)
-                            || !this.canNavigateToStandPosition(candidate)) {
+                            || !this.canNavigateToStandPosition(candidate)
+                            || (extraCheck != null && !extraCheck.test(candidate))) {
                         continue;
                     }
                     double distance = origin.distSqr(candidate);
@@ -1747,6 +1784,9 @@ public class LocalBehaviorController {
     }
 
     private void escapeLava() {
+        if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
+            return;
+        }
         if (!this.friend.isInLava() && !this.friend.isOnFire()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -1754,23 +1794,31 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Escaping lava needs PlayerEngine right now; Forge fallback does not implement lava escape.");
+            if (this.tryForgeEscapeLava(serverLevel)) {
+                return;
+            }
+            this.friend.getFriendBrain().failTask("I cannot find a reachable lava-safe stand position nearby.");
             return;
         }
         if (this.playerEngineAcquisitionName != null && this.body.hasEscapeLavaFinished()) {
             this.resetPlayerEngineAcquisitionState();
             if (!this.friend.isInLava() && !this.friend.isOnFire()) {
                 this.friend.getFriendBrain().completeTask();
+            } else if (this.tryForgeEscapeLava(serverLevel)) {
+                this.sayThrottled("PlayerEngine lava escape ended with danger remaining, so I am moving to local safe ground.");
             } else {
                 this.friend.getFriendBrain().failTask("PlayerEngine lava escape finished, but I am still in danger.");
             }
             return;
         }
         if (!this.body.escapeLava()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine lava escape did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
+            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
+            if (this.tryForgeEscapeLava(serverLevel)) {
+                this.sayThrottled("PlayerEngine lava escape did not start (" + status + "), so I am using a local safe-ground fallback.");
+                return;
+            }
+            this.friend.getFriendBrain().failTask("PlayerEngine lava escape did not start: " + status + ".");
             return;
         }
         this.playerEngineAcquisitionName = "escape_lava";
@@ -1780,6 +1828,65 @@ public class LocalBehaviorController {
             this.sayThrottled("Using PlayerEngine to escape lava.");
             this.playerEngineAcquisitionAnnounced = true;
         }
+    }
+
+    private boolean tryForgeEscapeLava(ServerLevel level) {
+        Optional<BlockPos> target = this.findNearestLavaSafeStandPosition(level, 12);
+        if (target.isEmpty()) {
+            return false;
+        }
+        this.body.moveToNearby(target.get(), TASK_SPEED);
+        this.friend.setFriendState(FriendState.EXECUTING_TASK);
+        this.sayThrottled("Moving away from lava to " + this.formatPos(target.get()) + ".");
+        return true;
+    }
+
+    private Optional<BlockPos> findNearestLavaSafeStandPosition(ServerLevel level, int radius) {
+        return this.findNearestReachableStandPosition(level, radius, -3, 6,
+                pos -> this.isLavaSafeStandPosition(level, pos));
+    }
+
+    private boolean isLavaSafeStandPosition(ServerLevel level, BlockPos pos) {
+        if (pos == null
+                || !level.hasChunkAt(pos)
+                || !level.hasChunkAt(pos.above())
+                || !level.hasChunkAt(pos.below())
+                || !this.canStandAt(level, pos)
+                || this.hasImmediateLavaHazard(level, pos)
+                || this.hasNearbyBurningHazard(level, pos)
+                || this.hasNearbyBurningHazard(level, pos.above())) {
+            return false;
+        }
+        return !this.isBurningHazardBlock(level.getBlockState(pos.below()))
+                && !this.isBurningHazardBlock(level.getBlockState(pos))
+                && !this.isBurningHazardBlock(level.getBlockState(pos.above()));
+    }
+
+    private boolean hasNearbyBurningHazard(ServerLevel level, BlockPos center) {
+        if (center == null || !level.hasChunkAt(center)) {
+            return false;
+        }
+        if (this.isBurningHazardBlock(level.getBlockState(center))) {
+            return true;
+        }
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacent = center.relative(direction);
+            if (level.hasChunkAt(adjacent) && this.isBurningHazardBlock(level.getBlockState(adjacent))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isBurningHazardBlock(BlockState state) {
+        Block block = state.getBlock();
+        return isFireBlock(state)
+                || block == Blocks.CAMPFIRE
+                || block == Blocks.SOUL_CAMPFIRE
+                || block == Blocks.MAGMA_BLOCK
+                || block == Blocks.LAVA
+                || block == Blocks.LAVA_CAULDRON
+                || state.getFluidState().is(FluidTags.LAVA);
     }
 
     private void clearLiquid(FriendTask task) {
@@ -2096,23 +2203,45 @@ public class LocalBehaviorController {
 
     private void equipArmor(FriendTask task) {
         String target = task == null || task.target() == null || task.target().isBlank() ? "iron" : task.target();
-        if (this.body.hasArmorEquipmentFinished(target)) {
+        if (this.hasLocalArmorEquipped(target)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
             this.friend.getFriendBrain().completeTask();
             return;
         }
+        if (this.playerEngineAcquisitionName != null && this.body.hasArmorEquipmentFinished(target)) {
+            this.body.stop();
+            this.resetPlayerEngineAcquisitionState();
+            if (this.tryForgeEquipCarriedArmor(target)) {
+                this.sayThrottled("I equipped carried armor after PlayerEngine finished.");
+                this.friend.getFriendBrain().completeTask();
+            } else {
+                this.friend.getFriendBrain().failTask("PlayerEngine armor equip finished, but the requested armor is not equipped.");
+            }
+            return;
+        }
         if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Equipping armor needs PlayerEngine right now; Forge fallback does not implement armor acquisition/equip.");
+            if (this.tryForgeEquipCarriedArmor(target)) {
+                this.sayThrottled("Equipped carried armor: " + target + ".");
+                this.friend.getFriendBrain().completeTask();
+                return;
+            }
+            this.friend.getFriendBrain().failTask("Equipping armor needs PlayerEngine to obtain missing armor; Forge fallback can only equip armor already in my inventory.");
             return;
         }
         if (!this.body.equipArmor(target)) {
+            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            this.resetPlayerEngineAcquisitionState();
+            if (this.tryForgeEquipCarriedArmor(target)) {
+                this.sayThrottled("PlayerEngine armor equip did not start (" + status + "), so I equipped carried armor locally.");
+                this.friend.getFriendBrain().completeTask();
+                return;
+            }
             this.friend.getFriendBrain().failTask("PlayerEngine armor equip did not start for "
                     + target
                     + ": "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + status
                     + ".");
-            this.resetPlayerEngineAcquisitionState();
             return;
         }
         this.playerEngineAcquisitionName = "equip_armor";
@@ -2122,6 +2251,137 @@ public class LocalBehaviorController {
             this.sayThrottled("Using PlayerEngine to equip armor: " + target + ".");
             this.playerEngineAcquisitionAnnounced = true;
         }
+    }
+
+    private boolean canForgeEquipCarriedArmor(String target) {
+        LocalArmorRequest request = this.localArmorRequest(target);
+        if (request == null) {
+            return false;
+        }
+        if (this.hasLocalArmorEquipped(request)) {
+            return true;
+        }
+        for (Item item : request.items()) {
+            if (!(item instanceof ArmorItem armorItem)) {
+                return false;
+            }
+            EquipmentSlot slot = armorItem.getEquipmentSlot();
+            if (this.friend.getItemBySlot(slot).is(item)) {
+                continue;
+            }
+            if (this.findInventorySlot(item) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean tryForgeEquipCarriedArmor(String target) {
+        LocalArmorRequest request = this.localArmorRequest(target);
+        if (request == null || !this.canForgeEquipCarriedArmor(target)) {
+            return false;
+        }
+        for (Item item : request.items()) {
+            if (!(item instanceof ArmorItem armorItem)) {
+                return false;
+            }
+            EquipmentSlot equipmentSlot = armorItem.getEquipmentSlot();
+            if (this.friend.getItemBySlot(equipmentSlot).is(item)) {
+                continue;
+            }
+            int inventorySlot = this.findInventorySlot(item);
+            if (inventorySlot < 0) {
+                return false;
+            }
+            ItemStack armorStack = this.friend.getInventoryProvider().getItem(inventorySlot).copy();
+            ItemStack currentlyEquipped = this.friend.getItemBySlot(equipmentSlot).copy();
+            this.friend.setItemSlot(equipmentSlot, armorStack);
+            this.friend.getInventoryProvider().setItem(inventorySlot, currentlyEquipped);
+        }
+        return this.hasLocalArmorEquipped(request);
+    }
+
+    private boolean hasLocalArmorEquipped(String target) {
+        LocalArmorRequest request = this.localArmorRequest(target);
+        return request != null && this.hasLocalArmorEquipped(request);
+    }
+
+    private boolean hasLocalArmorEquipped(LocalArmorRequest request) {
+        for (Item item : request.items()) {
+            if (!(item instanceof ArmorItem armorItem)
+                    || !this.friend.getItemBySlot(armorItem.getEquipmentSlot()).is(item)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int findInventorySlot(Item item) {
+        if (item == null) {
+            return -1;
+        }
+        return this.friend.getInventoryProvider().findFirstSlot(stack -> stack.is(item));
+    }
+
+    private LocalArmorRequest localArmorRequest(String target) {
+        if (target == null || target.isBlank()) {
+            return null;
+        }
+        String normalized = target.trim().toLowerCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
+        if (normalized.contains("/") || normalized.contains("\\")) {
+            return null;
+        }
+        if (normalized.startsWith("minecraft:")) {
+            normalized = normalized.substring("minecraft:".length());
+        }
+        return switch (normalized) {
+            case "leather" -> new LocalArmorRequest("leather", new Item[]{
+                    Items.LEATHER_HELMET,
+                    Items.LEATHER_CHESTPLATE,
+                    Items.LEATHER_LEGGINGS,
+                    Items.LEATHER_BOOTS
+            });
+            case "iron" -> new LocalArmorRequest("iron", new Item[]{
+                    Items.IRON_HELMET,
+                    Items.IRON_CHESTPLATE,
+                    Items.IRON_LEGGINGS,
+                    Items.IRON_BOOTS
+            });
+            case "gold", "golden" -> new LocalArmorRequest("golden", new Item[]{
+                    Items.GOLDEN_HELMET,
+                    Items.GOLDEN_CHESTPLATE,
+                    Items.GOLDEN_LEGGINGS,
+                    Items.GOLDEN_BOOTS
+            });
+            case "diamond" -> new LocalArmorRequest("diamond", new Item[]{
+                    Items.DIAMOND_HELMET,
+                    Items.DIAMOND_CHESTPLATE,
+                    Items.DIAMOND_LEGGINGS,
+                    Items.DIAMOND_BOOTS
+            });
+            case "netherite" -> new LocalArmorRequest("netherite", new Item[]{
+                    Items.NETHERITE_HELMET,
+                    Items.NETHERITE_CHESTPLATE,
+                    Items.NETHERITE_LEGGINGS,
+                    Items.NETHERITE_BOOTS
+            });
+            default -> this.localArmorItemRequest(normalized);
+        };
+    }
+
+    private LocalArmorRequest localArmorItemRequest(String normalizedTarget) {
+        ResourceLocation id = ResourceLocation.tryParse(normalizedTarget.contains(":")
+                ? normalizedTarget
+                : "minecraft:" + normalizedTarget);
+        if (id == null || !BuiltInRegistries.ITEM.containsKey(id)) {
+            return null;
+        }
+        Item item = BuiltInRegistries.ITEM.get(id);
+        if (!(item instanceof ArmorItem)) {
+            return null;
+        }
+        String normalized = id.getNamespace().equals("minecraft") ? id.getPath() : id.toString();
+        return new LocalArmorRequest(normalized, new Item[]{item});
     }
 
     private void giveItemToPlayer(FriendTask task) {
@@ -10694,7 +10954,8 @@ public class LocalBehaviorController {
 
     private void retreatFromHostiles(FriendTask task) {
         int distance = Math.max(4, task == null || task.amount() <= 0 ? 16 : task.amount());
-        if (this.friend.getPerception().nearestHostile(distance).isEmpty()) {
+        Optional<LivingEntity> hostile = this.friend.getPerception().nearestHostile(distance);
+        if (hostile.isEmpty()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
             this.friend.getFriendBrain().completeTask();
@@ -10704,22 +10965,35 @@ public class LocalBehaviorController {
                 && this.body.hasRetreatFromHostilesFinished(distance)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
-            if (this.friend.getPerception().nearestHostile(distance).isEmpty()) {
+            Optional<LivingEntity> remainingHostile = this.friend.getPerception().nearestHostile(distance);
+            if (remainingHostile.isEmpty()) {
                 this.friend.getFriendBrain().completeTask();
+            } else if (this.tryForgeHostileRetreat(remainingHostile.get(), distance)) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("PlayerEngine retreat ended with a hostile still nearby, so I am moving to a local safe point.");
             } else {
                 this.friend.getFriendBrain().failTask("PlayerEngine retreat finished, but hostile mobs are still nearby.");
             }
             return;
         }
         if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Retreating from hostile mobs needs PlayerEngine right now; Forge fallback only has single-target attack.");
+            if (this.tryForgeHostileRetreat(hostile.get(), distance)) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("Moving away from the hostile mob.");
+                return;
+            }
+            this.friend.getFriendBrain().failTask("I cannot find a safe local retreat path away from hostile mobs.");
             return;
         }
         if (!this.body.retreatFromHostiles(distance)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine hostile retreat did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
+            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
+            if (this.tryForgeHostileRetreat(hostile.get(), distance)) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("PlayerEngine hostile retreat did not start (" + status + "), so I am using a local retreat fallback.");
+                return;
+            }
+            this.friend.getFriendBrain().failTask("PlayerEngine hostile retreat did not start: " + status + ".");
             return;
         }
         this.playerEngineAcquisitionName = "retreat_hostiles";
@@ -10770,10 +11044,14 @@ public class LocalBehaviorController {
     }
 
     private boolean tryForgeCreeperRetreat(LivingEntity creeper, int distance) {
-        if (!(this.friend.level() instanceof ServerLevel level) || creeper == null || !creeper.isAlive()) {
+        return this.tryForgeHostileRetreat(creeper, distance);
+    }
+
+    private boolean tryForgeHostileRetreat(LivingEntity hostile, int distance) {
+        if (!(this.friend.level() instanceof ServerLevel level) || hostile == null || !hostile.isAlive()) {
             return false;
         }
-        Optional<BlockPos> retreatTarget = this.findCreeperRetreatStandPos(level, creeper, distance);
+        Optional<BlockPos> retreatTarget = this.findThreatRetreatStandPos(level, hostile, distance);
         if (retreatTarget.isEmpty()) {
             return false;
         }
@@ -10781,8 +11059,8 @@ public class LocalBehaviorController {
         return true;
     }
 
-    private Optional<BlockPos> findCreeperRetreatStandPos(ServerLevel level, LivingEntity creeper, int distance) {
-        Vec3 away = this.friend.position().subtract(creeper.position());
+    private Optional<BlockPos> findThreatRetreatStandPos(ServerLevel level, LivingEntity threat, int distance) {
+        Vec3 away = this.friend.position().subtract(threat.position());
         if (away.horizontalDistanceSqr() < 0.0001D) {
             away = new Vec3(1.0D, 0.0D, 0.0D);
         } else {
@@ -10798,7 +11076,7 @@ public class LocalBehaviorController {
             for (int dy = -2; dy <= 3; dy++) {
                 BlockPos candidate = new BlockPos(x, origin.getY() + dy, z);
                 if (!this.canStandAt(level, candidate)
-                        || creeper.distanceToSqr(candidate.getX() + 0.5D, candidate.getY(), candidate.getZ() + 0.5D) < requiredDistanceSqr) {
+                        || threat.distanceToSqr(candidate.getX() + 0.5D, candidate.getY(), candidate.getZ() + 0.5D) < requiredDistanceSqr) {
                     continue;
                 }
                 Path path = this.friend.getNavigation().createPath(candidate, 0);
@@ -10821,14 +11099,37 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Dodging projectiles needs PlayerEngine right now; Forge fallback does not implement projectile evasion.");
+            Optional<BlockPos> dodgeTarget = this.findLocalProjectileDodgeTarget(horizontalDistance, verticalDistance);
+            if (dodgeTarget.isPresent()) {
+                this.body.moveToNearby(dodgeTarget.get(), TASK_SPEED);
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("Dodging to a local safe point at " + this.formatPos(dodgeTarget.get()) + ".");
+                return;
+            }
+            if (!this.hasLocalProjectileDodgeThreat(horizontalDistance, verticalDistance)) {
+                this.body.stop();
+                this.resetPlayerEngineAcquisitionState();
+                this.friend.getFriendBrain().completeTask();
+                return;
+            }
+            this.friend.getFriendBrain().failTask("Dodging projectiles needs PlayerEngine or a reachable local dodge point.");
             return;
         }
         if (!this.body.dodgeProjectiles(horizontalDistance, verticalDistance)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine projectile dodge did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
+            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
+            Optional<BlockPos> dodgeTarget = this.findLocalProjectileDodgeTarget(horizontalDistance, verticalDistance);
+            if (dodgeTarget.isPresent()) {
+                this.body.moveToNearby(dodgeTarget.get(), TASK_SPEED);
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("PlayerEngine projectile dodge did not start (" + status + "), so I am using a local dodge point.");
+                return;
+            }
+            if (!this.hasLocalProjectileDodgeThreat(horizontalDistance, verticalDistance)) {
+                this.friend.getFriendBrain().completeTask();
+                return;
+            }
+            this.friend.getFriendBrain().failTask("PlayerEngine projectile dodge did not start: " + status + ".");
             return;
         }
         this.playerEngineAcquisitionName = "dodge_projectiles";
@@ -10840,11 +11141,115 @@ public class LocalBehaviorController {
         }
     }
 
+    private Optional<BlockPos> findLocalProjectileDodgeTarget(int horizontalDistance, int verticalDistance) {
+        if (!(this.friend.level() instanceof ServerLevel level)) {
+            return Optional.empty();
+        }
+
+        Optional<Projectile> projectile = this.nearestIncomingProjectileThreat(horizontalDistance, verticalDistance);
+        if (projectile.isPresent()) {
+            Optional<BlockPos> dodgeTarget = this.findProjectileDodgeStandPosition(level, projectile.get(), horizontalDistance, verticalDistance);
+            if (dodgeTarget.isPresent()) {
+                return dodgeTarget;
+            }
+        }
+
+        int skeletonRange = Math.max(8, horizontalDistance * 4);
+        Optional<Skeleton> skeleton = this.nearestSkeletonThreat(skeletonRange);
+        return skeleton.flatMap(value -> this.findThreatRetreatStandPos(level, value, Math.max(6, horizontalDistance + 4)));
+    }
+
+    private boolean hasLocalProjectileDodgeThreat(int horizontalDistance, int verticalDistance) {
+        return this.nearestIncomingProjectileThreat(horizontalDistance, verticalDistance).isPresent()
+                || this.nearestSkeletonThreat(Math.max(8, horizontalDistance * 4)).isPresent();
+    }
+
+    private Optional<Projectile> nearestIncomingProjectileThreat(int horizontalDistance, int verticalDistance) {
+        if (!(this.friend.level() instanceof ServerLevel level)) {
+            return Optional.empty();
+        }
+        int horizontalRange = Math.max(8, horizontalDistance * 4);
+        int verticalRange = Math.max(4, verticalDistance + 2);
+        AABB searchBox = this.friend.getBoundingBox().inflate(horizontalRange, verticalRange, horizontalRange);
+        Vec3 friendCenter = this.friend.position().add(0.0D, this.friend.getBbHeight() * 0.5D, 0.0D);
+        return level.getEntitiesOfClass(Projectile.class, searchBox, projectile ->
+                        projectile.isAlive()
+                                && projectile.getOwner() != this.friend
+                                && this.isProjectileThreatAt(projectile, friendCenter, horizontalDistance, verticalDistance))
+                .stream()
+                .min(Comparator.comparingDouble(projectile -> projectile.distanceToSqr(this.friend)));
+    }
+
+    private Optional<BlockPos> findProjectileDodgeStandPosition(
+            ServerLevel level,
+            Projectile projectile,
+            int horizontalDistance,
+            int verticalDistance
+    ) {
+        Vec3 velocity = projectile.getDeltaMovement();
+        Vec3 lateral = new Vec3(-velocity.z, 0.0D, velocity.x);
+        if (lateral.horizontalDistanceSqr() < 0.0001D) {
+            lateral = this.friend.position().subtract(projectile.position());
+            lateral = new Vec3(-lateral.z, 0.0D, lateral.x);
+        }
+        if (lateral.horizontalDistanceSqr() < 0.0001D) {
+            lateral = new Vec3(1.0D, 0.0D, 0.0D);
+        } else {
+            lateral = lateral.normalize();
+        }
+
+        BlockPos origin = this.friend.blockPosition();
+        int farthest = Math.max(2, horizontalDistance);
+        for (int step = farthest; step >= 2; step--) {
+            for (int sign : new int[]{1, -1}) {
+                int x = origin.getX() + (int) Math.round(lateral.x * step * sign);
+                int z = origin.getZ() + (int) Math.round(lateral.z * step * sign);
+                for (int dy = -1; dy <= 1; dy++) {
+                    BlockPos candidate = new BlockPos(x, origin.getY() + dy, z);
+                    Vec3 candidateCenter = Vec3.atBottomCenterOf(candidate).add(0.0D, this.friend.getBbHeight() * 0.5D, 0.0D);
+                    if (!this.canStandAt(level, candidate)
+                            || !this.canNavigateToStandPosition(candidate)
+                            || this.isProjectileThreatAt(projectile, candidateCenter, Math.max(1, horizontalDistance - 1), verticalDistance)) {
+                        continue;
+                    }
+                    return Optional.of(candidate.immutable());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean isProjectileThreatAt(Projectile projectile, Vec3 targetCenter, int horizontalDistance, int verticalDistance) {
+        Vec3 velocity = projectile.getDeltaMovement();
+        double speedSqr = velocity.lengthSqr();
+        if (speedSqr < 0.0001D) {
+            return false;
+        }
+        Vec3 toTarget = targetCenter.subtract(projectile.position());
+        double projection = toTarget.dot(velocity);
+        if (projection <= 0.0D) {
+            return false;
+        }
+        double ticksToClosestApproach = projection / speedSqr;
+        if (ticksToClosestApproach > 20.0D) {
+            return false;
+        }
+        Vec3 closest = projectile.position().add(velocity.scale(ticksToClosestApproach));
+        double dx = closest.x - targetCenter.x;
+        double dz = closest.z - targetCenter.z;
+        double horizontalDistanceSqr = dx * dx + dz * dz;
+        double verticalDelta = Math.abs(closest.y - targetCenter.y);
+        return horizontalDistanceSqr <= (double) horizontalDistance * (double) horizontalDistance
+                && verticalDelta <= Math.max(1, verticalDistance);
+    }
+
     private void projectileProtectionWall(FriendTask task) {
         int range = Math.max(4, task == null || task.amount() <= 0 ? 16 : task.amount());
-        if (!this.hasNearbySkeletonThreat(range)) {
+        Optional<Skeleton> threat = this.nearestSkeletonThreat(range);
+        if (threat.isEmpty()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
+            this.placeTarget = null;
             this.friend.getFriendBrain().completeTask();
             return;
         }
@@ -10852,22 +11257,36 @@ public class LocalBehaviorController {
                 && this.body.hasProjectileProtectionWallFinished()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
-            if (!this.hasNearbySkeletonThreat(range)) {
+            Optional<Skeleton> remainingThreat = this.nearestSkeletonThreat(range);
+            if (remainingThreat.isEmpty()) {
+                this.placeTarget = null;
                 this.friend.getFriendBrain().completeTask();
+            } else if (this.tryForgeProjectileWall(remainingThreat.get())) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("PlayerEngine projectile wall ended with a skeleton still aiming, so I am placing local cover.");
             } else {
                 this.friend.getFriendBrain().failTask("PlayerEngine projectile wall finished, but a skeleton threat is still nearby.");
             }
             return;
         }
         if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Building a projectile protection wall needs PlayerEngine right now; Forge fallback does not implement reactive wall placement.");
+            if (this.tryForgeProjectileWall(threat.get())) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("Placing local cover against the skeleton.");
+                return;
+            }
+            this.friend.getFriendBrain().failTask("Building a projectile protection wall needs PlayerEngine or a carried throwaway block with a reachable cover placement.");
             return;
         }
         if (!this.body.projectileProtectionWall()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine projectile protection wall did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
+            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
+            if (this.tryForgeProjectileWall(threat.get())) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                this.sayThrottled("PlayerEngine projectile wall did not start (" + status + "), so I am placing local cover.");
+                return;
+            }
+            this.friend.getFriendBrain().failTask("PlayerEngine projectile protection wall did not start: " + status + ".");
             return;
         }
         this.playerEngineAcquisitionName = "projectile_wall";
@@ -10880,13 +11299,99 @@ public class LocalBehaviorController {
     }
 
     private boolean hasNearbySkeletonThreat(int range) {
+        return this.nearestSkeletonThreat(range).isPresent();
+    }
+
+    private Optional<Skeleton> nearestSkeletonThreat(int range) {
         if (!(this.friend.level() instanceof ServerLevel level)) {
-            return false;
+            return Optional.empty();
         }
         AABB searchBox = this.friend.getBoundingBox().inflate(Math.max(4, range));
-        return !level.getEntitiesOfClass(Skeleton.class, searchBox, skeleton -> skeleton.isAlive()
-                && skeleton.hasLineOfSight(this.friend)
-                && skeleton.distanceToSqr(this.friend) <= (double) range * (double) range).isEmpty();
+        return level.getEntitiesOfClass(Skeleton.class, searchBox, skeleton -> skeleton.isAlive()
+                        && skeleton.hasLineOfSight(this.friend)
+                        && skeleton.distanceToSqr(this.friend) <= (double) range * (double) range)
+                .stream()
+                .min(Comparator.comparingDouble(skeleton -> skeleton.distanceToSqr(this.friend)));
+    }
+
+    private boolean tryForgeProjectileWall(Skeleton skeleton) {
+        if (!(this.friend.level() instanceof ServerLevel level) || skeleton == null || !skeleton.isAlive()) {
+            return false;
+        }
+        Block block = this.expeditionFloorRepairBlockToPlace(this.friend.getCurrentTask());
+        if (block == null) {
+            return false;
+        }
+        if (this.placeTarget == null || !this.canUseProjectileWallPlaceTarget(level, this.placeTarget, skeleton)) {
+            this.placeTarget = this.findProjectileWallPlaceTarget(level, skeleton).orElse(null);
+        }
+        if (this.placeTarget == null) {
+            return false;
+        }
+
+        BlockPos target = this.placeTarget;
+        PlaceActionAdapter.PlaceResult result = this.placeAdapter.placeBlock(
+                level,
+                target,
+                block,
+                stack -> this.isMatchingFloorRepairBlock(stack, block),
+                () -> this.findStandPositionNearBlock(level, target),
+                TASK_SPEED
+        );
+        if (result == PlaceActionAdapter.PlaceResult.WORKING) {
+            return true;
+        }
+        if (result == PlaceActionAdapter.PlaceResult.PLACED) {
+            this.placeTarget = null;
+            return true;
+        }
+        this.placeTarget = null;
+        return false;
+    }
+
+    private Optional<BlockPos> findProjectileWallPlaceTarget(ServerLevel level, Skeleton skeleton) {
+        Vec3 away = this.friend.position().subtract(skeleton.position());
+        if (away.horizontalDistanceSqr() < 0.0001D) {
+            away = new Vec3(1.0D, 0.0D, 0.0D);
+        } else {
+            away = new Vec3(away.x, 0.0D, away.z).normalize();
+        }
+
+        BlockPos origin = this.friend.blockPosition();
+        int[] stepsTowardThreat = new int[]{2, 1, 3};
+        for (int step : stepsTowardThreat) {
+            int x = origin.getX() - (int) Math.round(away.x * step);
+            int z = origin.getZ() - (int) Math.round(away.z * step);
+            for (int yOffset = 0; yOffset <= 2; yOffset++) {
+                BlockPos candidate = new BlockPos(x, origin.getY() + yOffset, z);
+                if (this.canUseProjectileWallPlaceTarget(level, candidate, skeleton)) {
+                    return Optional.of(candidate.immutable());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean canUseProjectileWallPlaceTarget(ServerLevel level, BlockPos target, Skeleton skeleton) {
+        if (target == null
+                || skeleton == null
+                || !skeleton.isAlive()
+                || !this.canPlaceBlockAt(level, target)) {
+            return false;
+        }
+        AABB blockBox = new AABB(
+                target.getX(),
+                target.getY(),
+                target.getZ(),
+                target.getX() + 1.0D,
+                target.getY() + 1.0D,
+                target.getZ() + 1.0D
+        );
+        if (blockBox.intersects(this.friend.getBoundingBox()) || blockBox.intersects(skeleton.getBoundingBox())) {
+            return false;
+        }
+        return this.interaction.canReachBlock(target)
+                || this.findStandPositionNearBlock(level, target).isPresent();
     }
 
     private void attackNearbyHostile() {
@@ -12254,6 +12759,9 @@ public class LocalBehaviorController {
     }
 
     private record PlayerEngineAcquisitionRequest(String catalogueName, int amount) {
+    }
+
+    private record LocalArmorRequest(String normalizedTarget, Item[] items) {
     }
 
     private record LayerTarget(String dimension, int minY, int maxY) {
