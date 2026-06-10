@@ -82,6 +82,16 @@ public class PlayerEngineEmbodiedController implements EmbodiedController {
     }
 
     @Override
+    public boolean goToYLevel(int yLevel) {
+        return this.playerEngine.goToYLevel(yLevel);
+    }
+
+    @Override
+    public boolean hasGoToYLevelFinished(int yLevel) {
+        return this.playerEngine.hasGoToYLevelFinished(yLevel);
+    }
+
+    @Override
     public boolean placeBlockAt(BlockPos pos, String blockTarget) {
         return this.playerEngine.placeBlockAt(pos, blockTarget);
     }
@@ -327,6 +337,16 @@ public class PlayerEngineEmbodiedController implements EmbodiedController {
     @Override
     public boolean hasEscapeLavaFinished() {
         return this.playerEngine.hasEscapeLavaFinished();
+    }
+
+    @Override
+    public boolean clearLiquid(BlockPos liquidPosition) {
+        return this.playerEngine.clearLiquid(liquidPosition);
+    }
+
+    @Override
+    public boolean hasClearLiquidFinished(BlockPos liquidPosition) {
+        return this.playerEngine.hasClearLiquidFinished(liquidPosition);
     }
 
     @Override

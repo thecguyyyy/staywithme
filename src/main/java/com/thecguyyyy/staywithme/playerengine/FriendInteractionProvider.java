@@ -52,6 +52,15 @@ public class FriendInteractionProvider {
         return this.fallback.placeBlockFromInventory(level, pos, block, inventoryMatcher);
     }
 
+    public boolean placeBlockReplacingLiquid(
+            ServerLevel level,
+            BlockPos pos,
+            Block block,
+            Predicate<ItemStack> inventoryMatcher
+    ) {
+        return this.fallback.placeBlockReplacingLiquidFromInventory(level, pos, block, inventoryMatcher);
+    }
+
     public boolean placePillarBlock(ServerLevel level, BlockPos pos, Block block, Predicate<ItemStack> inventoryMatcher) {
         return this.fallback.placePillarBlockFromInventory(level, pos, block, inventoryMatcher);
     }

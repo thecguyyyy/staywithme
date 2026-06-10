@@ -8,6 +8,7 @@ import com.player2.playerengine.automaton.api.pathing.goals.GoalBlock;
 import com.player2.playerengine.commands.DepositCommand;
 import com.player2.playerengine.player2api.utils.CharacterUtils;
 import com.player2.playerengine.tasks.ResourceTask;
+import com.player2.playerengine.tasks.construction.ClearLiquidTask;
 import com.player2.playerengine.tasks.construction.PlaceBlockTask;
 import com.player2.playerengine.tasks.construction.PlaceStructureBlockTask;
 import com.player2.playerengine.tasks.construction.ProjectileProtectionWallTask;
@@ -27,6 +28,7 @@ import com.player2.playerengine.tasks.movement.FollowPlayerTask;
 import com.player2.playerengine.tasks.movement.GetOutOfWaterTask;
 import com.player2.playerengine.tasks.movement.GetToBlockTask;
 import com.player2.playerengine.tasks.movement.GetToEntityTask;
+import com.player2.playerengine.tasks.movement.GetToYTask;
 import com.player2.playerengine.tasks.movement.PickupDroppedItemTask;
 import com.player2.playerengine.tasks.movement.RunAwayFromCreepersTask;
 import com.player2.playerengine.tasks.movement.RunAwayFromHostilesTask;
@@ -349,6 +351,51 @@ public class FriendPlayerEngineController {
                 && signature.equals(this.currentAcquisitionSignature)
                 && (this.lastAcquisitionStatus.startsWith("callback_finished(")
                 || this.lastAcquisitionStatus.startsWith("already_satisfied(")));
+    }
+
+    public boolean goToYLevel(int yLevel) {
+        String signature = this.goToYLevelSignature(yLevel);
+        if (this.friend.blockPosition().getY() == yLevel) {
+            this.currentAcquisitionSignature = signature;
+            this.acquisitionFinished = true;
+            this.acquisitionTicks = 0;
+            this.lastAcquisitionStatus = "already_satisfied(" + signature + ")";
+            return true;
+        }
+
+        PlayerEngineController highLevel = this.controller();
+        if (highLevel == null) {
+            this.lastAcquisitionStatus = "task_controller_unavailable";
+            return false;
+        }
+
+        try {
+            if (signature.equals(this.currentAcquisitionSignature)
+                    && !this.acquisitionFinished
+                    && highLevel.getUserTaskChain().isActive()) {
+                this.lastAcquisitionStatus = "running(" + signature + ")";
+                return true;
+            }
+
+            this.prepareHighLevelTask(signature);
+            highLevel.runUserTask(new GetToYTask(yLevel), () -> {
+                this.acquisitionFinished = true;
+                this.lastAcquisitionStatus = "callback_finished(" + signature + ")";
+            });
+            return true;
+        } catch (RuntimeException | LinkageError error) {
+            this.disable(
+                    "go to y failed: " + error.getClass().getSimpleName() + ": " + error.getMessage(),
+                    error
+            );
+            return false;
+        }
+    }
+
+    public boolean hasGoToYLevelFinished(int yLevel) {
+        String signature = this.goToYLevelSignature(yLevel);
+        return this.friend.blockPosition().getY() == yLevel
+                || (this.acquisitionFinished && signature.equals(this.currentAcquisitionSignature));
     }
 
     public boolean placeBlockAt(BlockPos target, String rawBlockTarget) {
@@ -1354,6 +1401,49 @@ public class FriendPlayerEngineController {
                 && this.lastAcquisitionStatus.startsWith("callback_finished(");
     }
 
+    public boolean clearLiquid(BlockPos liquidPosition) {
+        if (liquidPosition == null) {
+            this.lastAcquisitionStatus = "invalid_liquid_position";
+            return false;
+        }
+
+        PlayerEngineController highLevel = this.controller();
+        if (highLevel == null) {
+            this.lastAcquisitionStatus = "task_controller_unavailable";
+            return false;
+        }
+
+        try {
+            String signature = this.clearLiquidSignature(liquidPosition);
+            if (signature.equals(this.currentAcquisitionSignature)
+                    && !this.acquisitionFinished
+                    && highLevel.getUserTaskChain().isActive()) {
+                this.lastAcquisitionStatus = "running(" + signature + ")";
+                return true;
+            }
+
+            this.prepareHighLevelTask(signature);
+            highLevel.runUserTask(new ClearLiquidTask(liquidPosition), () -> {
+                this.acquisitionFinished = true;
+                this.lastAcquisitionStatus = "callback_finished(" + signature + ")";
+            });
+            return true;
+        } catch (RuntimeException | LinkageError error) {
+            this.disable(
+                    "clear liquid failed: " + error.getClass().getSimpleName() + ": " + error.getMessage(),
+                    error
+            );
+            return false;
+        }
+    }
+
+    public boolean hasClearLiquidFinished(BlockPos liquidPosition) {
+        return liquidPosition != null
+                && this.acquisitionFinished
+                && this.clearLiquidSignature(liquidPosition).equals(this.currentAcquisitionSignature)
+                && this.lastAcquisitionStatus.startsWith("callback_finished(");
+    }
+
     public boolean putOutFire(BlockPos firePosition) {
         if (firePosition == null) {
             this.lastAcquisitionStatus = "invalid_fire_position";
@@ -1664,6 +1754,15 @@ public class FriendPlayerEngineController {
         return "escape_lava";
     }
 
+    private String clearLiquidSignature(BlockPos liquidPosition) {
+        return "clear_liquid:"
+                + liquidPosition.getX()
+                + ","
+                + liquidPosition.getY()
+                + ","
+                + liquidPosition.getZ();
+    }
+
     private String putOutFireSignature(BlockPos firePosition) {
         return "put_out_fire:"
                 + firePosition.getX()
@@ -1692,6 +1791,10 @@ public class FriendPlayerEngineController {
                 + target.getZ()
                 + ":"
                 + String.format(Locale.ROOT, "%.1f", Math.max(1.0D, closeEnoughDistance));
+    }
+
+    private String goToYLevelSignature(int yLevel) {
+        return "goto_y:" + yLevel;
     }
 
     private String placeBlockSignature(BlockPos target, String blockTarget) {

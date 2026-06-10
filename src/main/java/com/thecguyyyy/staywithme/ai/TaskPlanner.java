@@ -50,6 +50,7 @@ public class TaskPlanner {
             - SLEEP_THROUGH_NIGHT: use PlayerEngine to obtain/place/use a bed and sleep until daytime.
             - GET_OUT_OF_WATER: use PlayerEngine to leave water and reach dry ground.
             - ESCAPE_LAVA: use PlayerEngine to escape lava or fire danger.
+            - CLEAR_LIQUID: use PlayerEngine's ClearLiquidTask to remove water or lava at a concrete coordinate. Target must be "x,y,z".
             - PUT_OUT_FIRE: use PlayerEngine's PutOutFireTask to extinguish nearby fire or soul fire blocks. Amount is scan range, default 8.
             - EQUIP_ARMOR: use PlayerEngine to obtain and equip armor. Target can be a material set such as iron, diamond, netherite, or a specific armor item id.
             - GET_ITEM: obtain a vanilla item or PlayerEngine TaskCatalogue-style target such as torch, log, planks, raw_iron, cobblestone, or minecraft:oak_log. PlayerEngine may recursively gather ingredients when available; Forge-native mining/crafting remains fallback for supported targets.
@@ -107,6 +108,7 @@ public class TaskPlanner {
             - Prefer SLEEP_THROUGH_NIGHT when the player asks to sleep, go to bed, skip night, or wait out the night.
             - Prefer GET_OUT_OF_WATER when the player asks the companion to get out of water, swim to shore, or reach dry land.
             - Prefer ESCAPE_LAVA when the player asks the companion to escape lava, get out of lava, or stop burning.
+            - Prefer CLEAR_LIQUID when the player asks to clear, block, plug, or remove water/lava/liquid at concrete coordinates.
             - Prefer PUT_OUT_FIRE when the player asks the companion to put out fire, extinguish flames, or clear nearby fire blocks.
             - Prefer EQUIP_ARMOR when the player asks to equip armor, wear armor, gear up with armor, or put on a named armor set/piece.
             - Prefer PICKUP_DROPPED_ITEM when the player explicitly asks to pick up, loot, or collect dropped/ground items. This is pickup-only; use GET_ITEM for broad resource acquisition.
@@ -129,7 +131,7 @@ public class TaskPlanner {
 
             Required JSON schema:
             {
-              "action": "FOLLOW_PLAYER | GO_TO_POSITION | PLACE_BLOCK | STOP | SAY | COLLECT_WOOD | COLLECT_BUILDING_MATERIALS | COLLECT_FOOD | COLLECT_MEAT | COLLECT_FUEL | FISH | FARM | EXPLORE | SLEEP_THROUGH_NIGHT | GET_OUT_OF_WATER | ESCAPE_LAVA | PUT_OUT_FIRE | EQUIP_ARMOR | GET_ITEM | PICKUP_DROPPED_ITEM | GIVE_ITEM | DEPOSIT_INVENTORY | CRAFT_ITEM | SMELT_ITEM | MAKE_CRAFTING_TABLE | MAKE_STICKS | MAKE_CHEST | MAKE_WOODEN_AXE | MAKE_WOODEN_PICKAXE | MAKE_STONE_PICKAXE | MAKE_FURNACE | MAKE_IRON_INGOT | MAKE_IRON_PICKAXE | MINE_RESOURCE | MINING_EXPEDITION | ATTACK_NEARBY_HOSTILE | PROTECT_PLAYER | RETREAT_FROM_HOSTILES | RETREAT_FROM_CREEPERS | DODGE_PROJECTILES | PROJECTILE_PROTECTION_WALL | RETURN_TO_PLAYER | UNKNOWN",
+              "action": "FOLLOW_PLAYER | GO_TO_POSITION | PLACE_BLOCK | STOP | SAY | COLLECT_WOOD | COLLECT_BUILDING_MATERIALS | COLLECT_FOOD | COLLECT_MEAT | COLLECT_FUEL | FISH | FARM | EXPLORE | SLEEP_THROUGH_NIGHT | GET_OUT_OF_WATER | ESCAPE_LAVA | CLEAR_LIQUID | PUT_OUT_FIRE | EQUIP_ARMOR | GET_ITEM | PICKUP_DROPPED_ITEM | GIVE_ITEM | DEPOSIT_INVENTORY | CRAFT_ITEM | SMELT_ITEM | MAKE_CRAFTING_TABLE | MAKE_STICKS | MAKE_CHEST | MAKE_WOODEN_AXE | MAKE_WOODEN_PICKAXE | MAKE_STONE_PICKAXE | MAKE_FURNACE | MAKE_IRON_INGOT | MAKE_IRON_PICKAXE | MINE_RESOURCE | MINING_EXPEDITION | ATTACK_NEARBY_HOSTILE | PROTECT_PLAYER | RETREAT_FROM_HOSTILES | RETREAT_FROM_CREEPERS | DODGE_PROJECTILES | PROJECTILE_PROTECTION_WALL | RETURN_TO_PLAYER | UNKNOWN",
               "target": "string or null",
               "amount": 0,
               "message": "string or null",
@@ -269,6 +271,16 @@ public class TaskPlanner {
             amount = 0;
             action.target = "lava_escape";
         }
+        if (type == FriendTaskType.CLEAR_LIQUID) {
+            String coordinateTarget = normalizeCoordinateTarget(action.target);
+            if (coordinateTarget == null) {
+                type = FriendTaskType.UNKNOWN;
+                action.message = "Give me liquid coordinates as x y z or x,y,z.";
+            } else {
+                action.target = coordinateTarget;
+                amount = 1;
+            }
+        }
         if (type == FriendTaskType.PUT_OUT_FIRE) {
             amount = amount == 0 ? 8 : amount;
             action.target = "fire";
@@ -340,6 +352,10 @@ public class TaskPlanner {
         }
         if (containsAny(normalized, "follow me", "follow", "come with me", "\u8ddf\u7740\u6211", "\u8ddf\u968f", "\u8ddf\u6211", "\u8fc7\u6765")) {
             return FriendTask.follow(player.getUUID(), playerName, reason);
+        }
+        String clearLiquidTarget = parseSimpleClearLiquidTarget(normalized);
+        if (clearLiquidTarget != null) {
+            return new FriendTask(FriendTaskType.CLEAR_LIQUID, player.getUUID(), playerName, clearLiquidTarget, 1, null, reason);
         }
         String placeBlockTarget = parseSimplePlaceBlockTarget(normalized);
         if (placeBlockTarget != null) {
@@ -508,7 +524,7 @@ public class TaskPlanner {
         if (containsAny(normalized, "hello", "hi", "thanks", "thank you", "\u4f60\u597d", "\u8c22\u8c22")) {
             return FriendTask.say(player.getUUID(), playerName, "I'm here.", reason);
         }
-        return FriendTask.unknown(player.getUUID(), playerName, "I can follow, go to coordinates, stop, pick up dropped items, get/craft/smelt/give supported items, deposit inventory, collect wood/building materials/food/meat/fuel, fish, farm, explore, sleep, get out of water, escape lava, put out fire, equip armor, mine supported resources, attack, protect, retreat from hostiles or creepers, dodge projectiles, build projectile cover, return, or say a short message.", reason);
+        return FriendTask.unknown(player.getUUID(), playerName, "I can follow, go to coordinates, stop, pick up dropped items, get/craft/smelt/give supported items, deposit inventory, collect wood/building materials/food/meat/fuel, fish, farm, explore, sleep, get out of water, escape lava, clear liquid, put out fire, equip armor, mine supported resources, attack, protect, retreat from hostiles or creepers, dodge projectiles, build projectile cover, return, or say a short message.", reason);
     }
 
     private static String parseCoordinateRequest(String normalized) {
@@ -539,6 +555,20 @@ public class TaskPlanner {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private static String parseSimpleClearLiquidTarget(String normalized) {
+        if (!containsAny(
+                normalized,
+                "clear liquid", "remove liquid", "block liquid", "plug liquid",
+                "clear water", "remove water", "block water", "plug water",
+                "clear lava", "remove lava", "block lava", "plug lava",
+                "\u6e05\u7406\u6db2\u4f53", "\u5835\u4f4f\u6db2\u4f53", "\u6e05\u7406\u6c34", "\u5835\u6c34", "\u5835\u4f4f\u6c34",
+                "\u6e05\u7406\u5ca9\u6d46", "\u6e05\u7406\u7194\u5ca9", "\u5835\u5ca9\u6d46", "\u5835\u4f4f\u7194\u5ca9"
+        )) {
+            return null;
+        }
+        return parseCoordinateRequest(normalized);
     }
 
     private static String parseSimplePlaceBlockTarget(String normalized) {

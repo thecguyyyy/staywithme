@@ -138,6 +138,21 @@ public final class StayWithMeCommands {
                         .then(Commands.literal("outofwater").executes(StayWithMeCommands::getOutOfWater))
                         .then(Commands.literal("dryland").executes(StayWithMeCommands::getOutOfWater))
                         .then(Commands.literal("escapelava").executes(StayWithMeCommands::escapeLava))
+                        .then(Commands.literal("clearliquid")
+                                .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                        .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                        .executes(StayWithMeCommands::clearLiquid)))))
+                        .then(Commands.literal("clearwater")
+                                .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                        .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                        .executes(StayWithMeCommands::clearLiquid)))))
+                        .then(Commands.literal("clearlava")
+                                .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
+                                        .then(Commands.argument("y", IntegerArgumentType.integer(-2048, 2048))
+                                                .then(Commands.argument("z", IntegerArgumentType.integer(-30000000, 30000000))
+                                                        .executes(StayWithMeCommands::clearLiquid)))))
                         .then(Commands.literal("putoutfire")
                                 .executes(context -> putOutFire(context, 8))
                                 .then(Commands.argument("range", IntegerArgumentType.integer(1, 32))
@@ -525,6 +540,21 @@ public final class StayWithMeCommands {
                 0,
                 "Command /staywithme escapelava",
                 "Escaping lava with PlayerEngine."
+        );
+    }
+
+    private static int clearLiquid(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        int x = IntegerArgumentType.getInteger(context, "x");
+        int y = IntegerArgumentType.getInteger(context, "y");
+        int z = IntegerArgumentType.getInteger(context, "z");
+        String target = x + "," + y + "," + z;
+        return startHighLevelTask(
+                context,
+                FriendTaskType.CLEAR_LIQUID,
+                target,
+                1,
+                "Command /staywithme clearliquid",
+                "Clearing liquid at " + target + " with PlayerEngine-first execution."
         );
     }
 

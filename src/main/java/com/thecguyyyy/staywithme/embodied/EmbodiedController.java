@@ -47,6 +47,14 @@ public interface EmbodiedController {
         return false;
     }
 
+    default boolean goToYLevel(int yLevel) {
+        return false;
+    }
+
+    default boolean hasGoToYLevelFinished(int yLevel) {
+        return false;
+    }
+
     default boolean placeBlockAt(BlockPos pos, String blockTarget) {
         return false;
     }
@@ -230,6 +238,14 @@ public interface EmbodiedController {
     }
 
     default boolean hasEscapeLavaFinished() {
+        return false;
+    }
+
+    default boolean clearLiquid(BlockPos liquidPosition) {
+        return false;
+    }
+
+    default boolean hasClearLiquidFinished(BlockPos liquidPosition) {
         return false;
     }
 

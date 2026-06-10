@@ -91,10 +91,12 @@ Run these before deep fallback expedition testing:
    - At night, run `/staywithme sleep` or `/staywithme night`; during daytime, the task should complete immediately without starting PlayerEngine work.
    - Put the companion in shallow water and run `/staywithme outofwater` or `/staywithme dryland`; expect task summaries to show `GET_OUT_OF_WATER`, status to show `get_out_of_water`, and completion after it reaches dry ground.
    - In a controlled safe test world, put the companion in or next to lava/fire and run `/staywithme escapelava`; expect task summaries to show `ESCAPE_LAVA`, status to show `escape_lava`, and completion after it is no longer in lava or on fire.
+   - Place a reachable water or lava source at a known coordinate, then run `/staywithme clearliquid <x> <y> <z>`, `/staywithme clearwater <x> <y> <z>`, or `/staywithme clearlava <x> <y> <z>`.
+   - Expect task summaries to show `CLEAR_LIQUID`, status to show a PlayerEngine `clear_liquid:x,y,z` signature when PlayerEngine is loaded, and completion once the target fluid state is empty. With PlayerEngine disabled, give the companion cobblestone/dirt/cobbled deepslate/netherrack and verify the limited Forge fallback only succeeds when the liquid is reachable and has an adjacent sturdy placement face.
    - Place an ordinary fire or soul fire block near the companion, then run `/staywithme putoutfire 8` or `/staywithme extinguish 8`; expect task summaries to show `PUT_OUT_FIRE`, status to show a PlayerEngine `put_out_fire:x,y,z` signature when PlayerEngine is loaded, and completion once nearby fire blocks are gone.
    - Run `/staywithme equiparmor iron`, `/staywithme equiparmor diamond`, or `/staywithme equiparmor minecraft:iron_chestplate`.
-   - Through `/staywithme ask`, try `start fishing`, `farm these crops`, `explore farther`, `sleep through the night`, `swim to shore`, `escape lava`, `put out fire`, and `equip iron armor`.
-   - Expect task summaries to show `FISH`, `FARM`, `EXPLORE`, `SLEEP_THROUGH_NIGHT`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `PUT_OUT_FIRE`, or `EQUIP_ARMOR`, and `/staywithme status` to expose the PlayerEngine running signature for tasks that are not already satisfied.
+   - Through `/staywithme ask`, try `start fishing`, `farm these crops`, `explore farther`, `sleep through the night`, `swim to shore`, `escape lava`, `clear water at <x> <y> <z>`, `put out fire`, and `equip iron armor`.
+   - Expect task summaries to show `FISH`, `FARM`, `EXPLORE`, `SLEEP_THROUGH_NIGHT`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `CLEAR_LIQUID`, `PUT_OUT_FIRE`, or `EQUIP_ARMOR`, and `/staywithme status` to expose the PlayerEngine running signature for tasks that are not already satisfied.
    - After armor completion, visually confirm the companion's actual armor slots changed, not just that PlayerEngine reported callback completion.
    - With PlayerEngine disabled, expect PlayerEngine-only tasks to fail visibly instead of falling into unrelated local workflows. `PUT_OUT_FIRE` and `EXPLORE` are exceptions: fire uses close-range Forge-native block destruction, and explore picks a deterministic reachable standable target outward from the current position.
 
@@ -134,7 +136,7 @@ Run these before deep fallback expedition testing:
    - If PlayerEngine finishes without satisfying the requested item, expect fallback to the existing local expedition workflow.
 
 13. Local parser quantity fallback:
-   - Disable or clear the LLM key, then ask through `/staywithme ask` for `go to 10 64 -20`, `mine 4 coal`, `get 16 torches`, `get torches 16`, `give me 4 torches`, `bring me bread 1`, `deposit inventory`, `craft torches 16`, `smelt raw iron`, `make charcoal`, `collect 8 logs`, `collect furnace fuel`, `explore farther`, `swim to shore`, `escape lava`, `retreat from hostiles`, `flee creeper`, `dodge arrows`, `block arrows`, `farm 12`, `sleep through the night`, `equip diamond armor`, `protect me`, and `get food`.
+   - Disable or clear the LLM key, then ask through `/staywithme ask` for `go to 10 64 -20`, `mine 4 coal`, `get 16 torches`, `get torches 16`, `give me 4 torches`, `bring me bread 1`, `deposit inventory`, `craft torches 16`, `smelt raw iron`, `make charcoal`, `collect 8 logs`, `collect furnace fuel`, `explore farther`, `swim to shore`, `escape lava`, `clear water at 10 64 -20`, `retreat from hostiles`, `flee creeper`, `dodge arrows`, `block arrows`, `farm 12`, `sleep through the night`, `equip diamond armor`, `protect me`, and `get food`.
    - Expect the structured task amount to preserve the requested count instead of defaulting to one.
 
 ## Baseline Runs
@@ -147,6 +149,7 @@ Run these before deep fallback expedition testing:
 2. Iron expedition:
    - Run `/staywithme expedition minecraft:raw_iron 3`.
    - Expect stone-pickaxe preparation, supply chest setup, branch mining, final return, and non-essential inventory unload.
+   - During `DESCEND_TO_LAYER`, with PlayerEngine loaded, expect `/staywithme status` to briefly show a `goto_y:<targetY>` high-level signature before local staircase digging begins. If PlayerEngine reaches the target band, the workflow should complete the descend step without opening a new local staircase.
    - Confirm supply chest memory appears in `/staywithme memory`.
 
 3. Diamond expedition:
@@ -188,34 +191,41 @@ Run these before deep fallback expedition testing:
 
 2. Water leak avoidance:
    - Place water adjacent to a block the branch tunnel would dig.
-   - Expect `fluid` hazard avoidance and route rotation instead of opening a flooded tunnel.
+   - With PlayerEngine loaded or a carried throwaway block available, expect the companion to first try `CLEAR_LIQUID`/reachable block placement against the adjacent fluid before rotating.
+   - If clearing cannot start or cannot safely place, expect `fluid` hazard avoidance and route rotation instead of opening a flooded tunnel.
 
-3. Falling-block collapse avoidance:
+3. Automatic passage fluid clearing:
+   - Place a reachable water source directly adjacent to the next ordinary resource-exploration or expedition passage dig target.
+   - Give the companion cobblestone/dirt/cobbled deepslate/netherrack, or load PlayerEngine so `ClearLiquidTask` can run.
+   - Expect status/task speech to show liquid clearing before the dig continues, and confirm the tunnel is not flooded.
+
+4. Falling-block collapse avoidance:
    - Place gravel or sand directly above a stone block that the staircase or branch tunnel would otherwise dig.
    - Expect route rotation before the supporting stone is broken.
    - Repeat near water and confirm the companion does not open a collapse path that floods or lifts it out of the tunnel.
 
-4. Floor gap repair:
+5. Floor gap repair:
    - Create a one-block floor gap with sturdy support below.
    - Give expendable cobblestone, cobbled deepslate, dirt, or netherrack.
    - Expect floor repair before route rotation.
 
-5. Remembered route replay:
+6. Remembered route replay:
    - Complete one expedition, then run the same resource again.
    - Expect route reuse when endpoints are loaded and standable.
    - Block a remembered endpoint or waypoint and verify route invalidation/reselection.
 
-6. Movement stall guard:
+7. Movement stall guard:
    - Temporarily trap the companion during return or remembered-route travel.
    - After about 45 seconds without block-position progress, expect `moveWatch` to reach the limit and the expedition to pause/fallback instead of waiting forever.
 
-7. Local vertical passage:
+8. Local vertical passage:
    - Let descent open a staircase through solid stone and inspect a downward corner.
+   - If PlayerEngine is loaded, first confirm it attempts `GetToYTask`; if that cannot reach the layer, the local staircase fallback should continue instead of looping on PlayerEngine.
    - Expect enough forward head-space to be cleared before the companion enters the lower step.
    - Let ascent reuse or open an upward staircase.
    - Expect the companion to jump onto each prepared one-block rise instead of waiting on global navigation.
 
-8. Floor repair continuation:
+9. Floor repair continuation:
    - Create a supported one-block floor gap in the next branch-tunnel cell and provide an expendable repair block.
    - Expect the companion to approach from a neighboring stand position, place the floor, and continue through the repaired cell.
    - Remove all safe neighboring stand positions and expect route rotation instead of repeated walking toward the placement cell.

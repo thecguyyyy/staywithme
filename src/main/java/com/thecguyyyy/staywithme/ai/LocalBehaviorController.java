@@ -215,6 +215,9 @@ public class LocalBehaviorController {
     private String resourceDetachmentSource = "none";
     private String resourceDetachmentStatus = "idle";
     private boolean resourceDetachmentLocalAttempted;
+    private String descendPlayerEngineLayerStep;
+    private int descendPlayerEngineTargetY = Integer.MIN_VALUE;
+    private boolean descendPlayerEngineAttempted;
     private BlockPos expeditionDigTarget;
     private Direction expeditionDirection;
     private BlockPos expeditionSupplyPoint;
@@ -286,6 +289,9 @@ public class LocalBehaviorController {
     private BlockPos constructionVerticalFrom;
     private BlockPos constructionVerticalTarget;
     private int constructionVerticalActionTicks;
+    private BlockPos remotePlayerEngineTravelTarget;
+    private String remotePlayerEngineTravelLabel = "none";
+    private boolean remotePlayerEngineTravelAttempted;
     private LivingEntity combatTarget;
     private BlockPos fireExtinguishTarget;
     private BlockPos exploreTarget;
@@ -372,6 +378,7 @@ public class LocalBehaviorController {
         this.resetConstructionPathRecovery();
         this.resetBranchPattern();
         this.resetTorchPattern();
+        this.resetDescendPlayerEngineAttempt();
         this.placeTarget = null;
         this.craftingStationTarget = null;
         this.furnaceStationTarget = null;
@@ -473,6 +480,7 @@ public class LocalBehaviorController {
             case SLEEP_THROUGH_NIGHT -> this.sleepThroughNight(task);
             case GET_OUT_OF_WATER -> this.getOutOfWater();
             case ESCAPE_LAVA -> this.escapeLava();
+            case CLEAR_LIQUID -> this.clearLiquid(task);
             case PUT_OUT_FIRE -> this.putOutFire(task);
             case EQUIP_ARMOR -> this.equipArmor(task);
             case GIVE_ITEM -> this.giveItemToPlayer(task);
@@ -838,6 +846,10 @@ public class LocalBehaviorController {
         if (task.type() == FriendTaskType.PLACE_BLOCK
                 && parsePlaceBlockTarget(task.target()).isEmpty()) {
             return Optional.of("the saved place-block target is invalid: " + task.target());
+        }
+        if (task.type() == FriendTaskType.CLEAR_LIQUID
+                && parseBlockPosTarget(task.target()).isEmpty()) {
+            return Optional.of("the saved clear-liquid target is invalid: " + task.target());
         }
         if (task.type() == FriendTaskType.MINING_EXPEDITION) {
             Optional<String> dimensionProblem = this.validateRecoveredExpeditionDimension(task);
@@ -1672,6 +1684,170 @@ public class LocalBehaviorController {
         }
     }
 
+    private void clearLiquid(FriendTask task) {
+        if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
+            return;
+        }
+
+        Optional<BlockPos> parsedTarget = parseBlockPosTarget(task == null ? null : task.target());
+        if (parsedTarget.isEmpty()) {
+            this.friend.getFriendBrain().failTask("Clear-liquid tasks need a concrete coordinate target like 10,64,-20.");
+            return;
+        }
+
+        BlockPos liquidPos = parsedTarget.get();
+        if (isLiquidCleared(serverLevel, liquidPos)) {
+            this.body.stop();
+            this.resetPlayerEngineAcquisitionState();
+            this.friend.getFriendBrain().completeTask();
+            return;
+        }
+
+        if ("clear_liquid".equals(this.playerEngineAcquisitionName)) {
+            if (this.body.hasClearLiquidFinished(liquidPos)) {
+                this.body.stop();
+                this.resetPlayerEngineAcquisitionState();
+                if (isLiquidCleared(serverLevel, liquidPos)) {
+                    this.friend.getFriendBrain().completeTask();
+                } else {
+                    this.friend.getFriendBrain().failTask("PlayerEngine clear-liquid task finished, but liquid remains at " + this.formatPos(liquidPos) + ".");
+                }
+                return;
+            }
+            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+            return;
+        }
+
+        if (this.body.canUseHighLevelAcquisition() && this.body.clearLiquid(liquidPos)) {
+            this.playerEngineAcquisitionName = "clear_liquid";
+            this.playerEngineAcquisitionAmount = 1;
+            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+            if (!this.playerEngineAcquisitionAnnounced) {
+                this.sayThrottled("Using PlayerEngine to clear liquid at " + this.formatPos(liquidPos) + ".");
+                this.playerEngineAcquisitionAnnounced = true;
+            }
+            return;
+        }
+
+        this.tickForgeClearLiquidFallback(serverLevel, liquidPos);
+    }
+
+    private void tickForgeClearLiquidFallback(ServerLevel level, BlockPos liquidPos) {
+        Block block = this.expeditionFloorRepairBlockToPlace(this.friend.getCurrentTask());
+        if (block == null) {
+            this.friend.getFriendBrain().failTask("Clearing liquid needs PlayerEngine, a bucket, or a carried throwaway block.");
+            return;
+        }
+        if (!this.interaction.canReachBlock(liquidPos)) {
+            Optional<BlockPos> standPos = this.findStandPositionNearBlock(level, liquidPos);
+            if (standPos.isEmpty()) {
+                this.friend.getFriendBrain().failTask("I cannot find a reachable place to stand before clearing that liquid.");
+                return;
+            }
+            this.body.moveToNearby(standPos.get(), TASK_SPEED);
+            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+            this.sayThrottled("Moving close enough to clear liquid at " + this.formatPos(liquidPos) + ".");
+            return;
+        }
+
+        boolean placed = this.interaction.placeBlockReplacingLiquid(
+                level,
+                liquidPos,
+                block,
+                stack -> this.isMatchingFloorRepairBlock(stack, block)
+        );
+        if (placed || isLiquidCleared(level, liquidPos)) {
+            this.body.stop();
+            this.friend.getFriendBrain().completeTask();
+            return;
+        }
+
+        this.friend.getFriendBrain().failTask("I reached the liquid, but Forge fallback could not place a block into it.");
+    }
+
+    private boolean tryClearNearbyPassageFluid(
+            ServerLevel level,
+            WorkStep step,
+            BlockPos center,
+            String label,
+            boolean rememberExpedition
+    ) {
+        Optional<BlockPos> fluidPos = this.findNearestClearableFluid(level, center);
+        if (fluidPos.isEmpty()) {
+            return false;
+        }
+
+        BlockPos target = fluidPos.get();
+        if (this.body.canUseHighLevelAcquisition() && this.body.clearLiquid(target)) {
+            step.running("clearing liquid near " + label);
+            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+            this.sayThrottled("Clearing liquid at " + this.formatPos(target) + " before digging " + label + ".");
+            return true;
+        }
+
+        Block block = this.expeditionFloorRepairBlockToPlace(this.friend.getCurrentTask());
+        if (block == null) {
+            return false;
+        }
+        if (!this.interaction.canReachBlock(target)) {
+            Optional<BlockPos> standPos = this.findStandPositionNearBlock(level, target);
+            if (standPos.isEmpty()) {
+                return false;
+            }
+            this.body.moveToNearby(standPos.get(), TASK_SPEED);
+            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+            step.running("moving to clear liquid near " + label);
+            this.sayThrottled("Moving close enough to clear liquid at " + this.formatPos(target) + ".");
+            return true;
+        }
+
+        boolean placed = this.interaction.placeBlockReplacingLiquid(
+                level,
+                target,
+                block,
+                stack -> this.isMatchingFloorRepairBlock(stack, block)
+        );
+        if (!placed && !isLiquidCleared(level, target)) {
+            return false;
+        }
+
+        step.running("cleared liquid near " + label);
+        this.sayThrottled("Cleared liquid at " + this.formatPos(target) + " before continuing the tunnel.");
+        if (rememberExpedition) {
+            this.rememberExpeditionHazardAvoided("fluid_clear", target, "cleared liquid before " + label);
+        }
+        return true;
+    }
+
+    private Optional<BlockPos> findNearestClearableFluid(ServerLevel level, BlockPos center) {
+        if (center == null || !level.hasChunkAt(center)) {
+            return Optional.empty();
+        }
+
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        if (this.isClearableFluid(level, center)) {
+            best = center.immutable();
+            bestDistance = this.friend.blockPosition().distSqr(center);
+        }
+        for (Direction direction : Direction.values()) {
+            BlockPos candidate = center.relative(direction);
+            if (!this.isClearableFluid(level, candidate)) {
+                continue;
+            }
+            double distance = this.friend.blockPosition().distSqr(candidate);
+            if (distance < bestDistance) {
+                best = candidate.immutable();
+                bestDistance = distance;
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private boolean isClearableFluid(ServerLevel level, BlockPos pos) {
+        return pos != null && level.hasChunkAt(pos) && !level.getFluidState(pos).isEmpty();
+    }
+
     private void putOutFire(FriendTask task) {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
@@ -1814,6 +1990,10 @@ public class LocalBehaviorController {
 
     private static boolean isFireBlock(BlockState state) {
         return state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE);
+    }
+
+    private static boolean isLiquidCleared(ServerLevel level, BlockPos pos) {
+        return pos != null && level.hasChunkAt(pos) && level.getFluidState(pos).isEmpty();
     }
 
     private void equipArmor(FriendTask task) {
@@ -3521,6 +3701,9 @@ public class LocalBehaviorController {
 
         int currentY = this.friend.blockPosition().getY();
         if (currentY >= target.minY() && currentY <= target.maxY()) {
+            this.body.stop();
+            this.resetPlayerEngineAcquisitionState();
+            this.resetDescendPlayerEngineAttempt();
             this.rememberPortableNote(this.friend.getCurrentTask(), "expedition reached layer target="
                     + step.target()
                     + " pos="
@@ -3543,6 +3726,11 @@ public class LocalBehaviorController {
             return false;
         }
 
+        int targetY = currentY < target.minY() ? target.minY() : target.maxY();
+        if (this.tryDescendWithPlayerEngineYTask(step, targetY)) {
+            return false;
+        }
+
         if (currentY < target.minY()) {
             step.running("digging survival staircase up");
             this.updateTunnelTorchProgress();
@@ -3554,6 +3742,58 @@ public class LocalBehaviorController {
         this.updateTunnelTorchProgress();
         this.tryPlaceExpeditionTorch(serverLevel, step);
         return this.digOneStairDown(serverLevel, step);
+    }
+
+    private boolean tryDescendWithPlayerEngineYTask(WorkStep step, int targetY) {
+        String stepTarget = step == null ? "" : step.target();
+        if (!Objects.equals(this.descendPlayerEngineLayerStep, stepTarget)
+                || this.descendPlayerEngineTargetY != targetY) {
+            this.descendPlayerEngineLayerStep = stepTarget;
+            this.descendPlayerEngineTargetY = targetY;
+            this.descendPlayerEngineAttempted = false;
+        }
+
+        if ("goto_y".equals(this.playerEngineAcquisitionName)
+                && this.playerEngineAcquisitionAmount == targetY) {
+            if (!this.body.hasGoToYLevelFinished(targetY)) {
+                this.friend.setFriendState(FriendState.EXECUTING_TASK);
+                step.running("PlayerEngine moving to Y " + targetY);
+                return true;
+            }
+            this.resetPlayerEngineAcquisitionState();
+            this.descendPlayerEngineAttempted = true;
+            this.sayThrottled("PlayerEngine Y-layer move ended; falling back to local staircase if the layer is not reached.");
+            return false;
+        }
+
+        if (this.descendPlayerEngineAttempted || !this.body.canUseHighLevelAcquisition()) {
+            return false;
+        }
+
+        this.descendPlayerEngineAttempted = true;
+        if (!this.body.goToYLevel(targetY)) {
+            this.sayThrottled("PlayerEngine Y-layer movement did not start ("
+                    + shortStatus(this.body.highLevelAcquisitionStatus(), 120)
+                    + "). Digging a local staircase instead.");
+            this.resetPlayerEngineAcquisitionState();
+            return false;
+        }
+
+        this.playerEngineAcquisitionName = "goto_y";
+        this.playerEngineAcquisitionAmount = targetY;
+        this.friend.setFriendState(FriendState.EXECUTING_TASK);
+        step.running("PlayerEngine moving to Y " + targetY);
+        if (!this.playerEngineAcquisitionAnnounced) {
+            this.sayThrottled("Using PlayerEngine to reach mining Y layer " + targetY + " before local staircase fallback.");
+            this.playerEngineAcquisitionAnnounced = true;
+        }
+        return true;
+    }
+
+    private void resetDescendPlayerEngineAttempt() {
+        this.descendPlayerEngineLayerStep = null;
+        this.descendPlayerEngineTargetY = Integer.MIN_VALUE;
+        this.descendPlayerEngineAttempted = false;
     }
 
     private boolean executeBranchMineResourceStep(ServerLevel serverLevel, WorkStep step) {
@@ -4776,11 +5016,17 @@ public class LocalBehaviorController {
         BlockPos digTarget = blocker.get();
         this.resourceExploreDigTarget = digTarget;
         BlockState state = level.getBlockState(digTarget);
+        boolean nearFluidHazard = this.hasNearbyFluidHazard(level, digTarget);
+        boolean nearFluidLeak = this.hasNearbyFluidLeak(level, digTarget);
+        if ((nearFluidHazard || nearFluidLeak)
+                && this.tryClearNearbyPassageFluid(level, step, digTarget, label, false)) {
+            return false;
+        }
         if (state.hasBlockEntity()
                 || state.getDestroySpeed(level, digTarget) < 0.0F
                 || !state.getFluidState().isEmpty()
-                || this.hasNearbyFluidHazard(level, digTarget)
-                || this.hasNearbyFluidLeak(level, digTarget)
+                || nearFluidHazard
+                || nearFluidLeak
                 || this.hasFallingBlockCollapseRisk(level, digTarget)
                 || this.isRiskyExpeditionPassageBlock(state)) {
             if (this.shouldAttemptResourceDetachmentRecovery("unsafe_dig_block", this.friend.blockPosition(), false)
@@ -8864,12 +9110,18 @@ public class LocalBehaviorController {
             return false;
         }
         if (this.hasNearbyFluidHazard(level, target)) {
+            if (this.tryClearNearbyPassageFluid(level, step, target, label, true)) {
+                return false;
+            }
             this.rotatePassageDirection(label);
             step.running("avoiding lava near " + label);
             this.rememberExpeditionHazardAvoided("lava", target, "lava near " + label);
             return false;
         }
         if (this.hasNearbyFluidLeak(level, target)) {
+            if (this.tryClearNearbyPassageFluid(level, step, target, label, true)) {
+                return false;
+            }
             this.rotatePassageDirection(label);
             step.running("avoiding fluid leak near " + label);
             this.rememberExpeditionHazardAvoided("fluid", target, "fluid leak near " + label);

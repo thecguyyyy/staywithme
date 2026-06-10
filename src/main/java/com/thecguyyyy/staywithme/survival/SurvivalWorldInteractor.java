@@ -136,6 +136,20 @@ public class SurvivalWorldInteractor {
         return this.finishPlaceBlockFromInventory(level, pos, block, inventoryMatcher);
     }
 
+    public boolean placeBlockReplacingLiquidFromInventory(
+            ServerLevel level,
+            BlockPos pos,
+            Block block,
+            Predicate<ItemStack> inventoryMatcher
+    ) {
+        if (!level.hasChunkAt(pos)
+                || !this.canReachBlock(pos)
+                || !this.canReplaceLiquidAt(level, pos)) {
+            return false;
+        }
+        return this.finishPlaceBlockFromInventory(level, pos, block, inventoryMatcher);
+    }
+
     public boolean placePillarBlockFromInventory(
             ServerLevel level,
             BlockPos pos,
@@ -235,6 +249,29 @@ public class SurvivalWorldInteractor {
                 && !below.isAir()
                 && below.getFluidState().isEmpty()
                 && below.isFaceSturdy(level, pos.below(), net.minecraft.core.Direction.UP);
+    }
+
+    private boolean canReplaceLiquidAt(ServerLevel level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        return (state.getFluidState().is(FluidTags.WATER)
+                || state.getFluidState().is(FluidTags.LAVA))
+                && !state.hasBlockEntity()
+                && this.hasAdjacentPlacementFace(level, pos);
+    }
+
+    private boolean hasAdjacentPlacementFace(ServerLevel level, BlockPos pos) {
+        for (Direction direction : Direction.values()) {
+            BlockPos supportPos = pos.relative(direction);
+            if (!level.hasChunkAt(supportPos)) {
+                continue;
+            }
+            BlockState support = level.getBlockState(supportPos);
+            if (support.getFluidState().isEmpty()
+                    && support.isFaceSturdy(level, supportPos, direction.getOpposite())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean canPlaceBridgeBlockAt(ServerLevel level, BlockPos pos, BlockPos fromFeet) {

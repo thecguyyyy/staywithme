@@ -22,18 +22,19 @@ Run `.\gradlew.bat build` before packaging/testing.
 
 ## Broad PlayerEngine Task Resume
 
-1. With PlayerEngine loaded, start `/staywithme get torches 16`, `/staywithme pickup torch 1` with a dropped torch nearby, `/staywithme buildingmaterials 32`, `/staywithme give torch 4`, `/staywithme deposit`, `/staywithme food 10`, `/staywithme meat 10`, or `/staywithme smelt raw_iron 1`.
-2. Save and quit while `/staywithme status` shows an active `GET_ITEM`, `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`, `COLLECT_MEAT`, `COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `PUT_OUT_FIRE`, `RETREAT_FROM_HOSTILES`, `RETREAT_FROM_CREEPERS`, `DODGE_PROJECTILES`, or `PROJECTILE_PROTECTION_WALL` task.
+1. With PlayerEngine loaded, start `/staywithme get torches 16`, `/staywithme pickup torch 1` with a dropped torch nearby, `/staywithme buildingmaterials 32`, `/staywithme give torch 4`, `/staywithme deposit`, `/staywithme food 10`, `/staywithme meat 10`, `/staywithme smelt raw_iron 1`, or `/staywithme clearliquid <x> <y> <z>` against a reachable water/lava source.
+2. Save and quit while `/staywithme status` shows an active `GET_ITEM`, `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`, `COLLECT_MEAT`, `COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `CLEAR_LIQUID`, `PUT_OUT_FIRE`, `RETREAT_FROM_HOSTILES`, `RETREAT_FROM_CREEPERS`, `DODGE_PROJECTILES`, or `PROJECTILE_PROTECTION_WALL` task.
 3. Reload the world and run `/staywithme status`.
 4. Expected:
-   - `task=` shows the recovered `GET_ITEM`, `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`, `COLLECT_MEAT`, `COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `PUT_OUT_FIRE`, `RETREAT_FROM_HOSTILES`, `RETREAT_FROM_CREEPERS`, `DODGE_PROJECTILES`, or `PROJECTILE_PROTECTION_WALL` task type and original amount.
+   - `task=` shows the recovered `GET_ITEM`, `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`, `COLLECT_MEAT`, `COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `CLEAR_LIQUID`, `PUT_OUT_FIRE`, `RETREAT_FROM_HOSTILES`, `RETREAT_FROM_CREEPERS`, `DODGE_PROJECTILES`, or `PROJECTILE_PROTECTION_WALL` task type and original amount.
    - PlayerEngine-first execution restarts when available.
    - `PICKUP_DROPPED_ITEM` resumes as pickup-only work; if the dropped item despawned or is no longer reachable, it should fail visibly instead of broad-getting or crafting the item.
    - `COLLECT_BUILDING_MATERIALS` resumes with `GetBuildingMaterialsTask` until current route-repair block inventory satisfies the saved count.
    - `GIVE_ITEM` resumes against the saved task player name and should drop the requested item near that player once the item is obtained.
    - `DEPOSIT_INVENTORY` resumes by recomputing current non-tool inventory targets and stores them in a valid nearby or newly placed container.
    - `SMELT_ITEM` resumes as PlayerEngine `SmeltInFurnaceTask` for the saved output target and completes only after the output item count is present.
-   - If PlayerEngine is unavailable after reload, `GET_ITEM` falls back to any rebuildable Forge workflow, `PUT_OUT_FIRE` falls back to close-range Forge-native extinguishing, `RETREAT_FROM_CREEPERS` falls back to a reachable local retreat point, and `PROJECTILE_PROTECTION_WALL` completes only if no skeleton threat remains, while `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`/`COLLECT_MEAT`/`COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `RETREAT_FROM_HOSTILES`, and `DODGE_PROJECTILES` fail visibly unless the current state already satisfies the request.
+   - `CLEAR_LIQUID` resumes against the saved `x,y,z` coordinate and completes only once that coordinate's fluid state is empty.
+   - If PlayerEngine is unavailable after reload, `GET_ITEM` falls back to any rebuildable Forge workflow, `CLEAR_LIQUID` can only continue through the limited reachable-liquid block-placement fallback or already-cleared state, `PUT_OUT_FIRE` falls back to close-range Forge-native extinguishing, `RETREAT_FROM_CREEPERS` falls back to a reachable local retreat point, and `PROJECTILE_PROTECTION_WALL` completes only if no skeleton threat remains, while `PICKUP_DROPPED_ITEM`, `COLLECT_BUILDING_MATERIALS`, `GIVE_ITEM`, `DEPOSIT_INVENTORY`, `COLLECT_FOOD`/`COLLECT_MEAT`/`COLLECT_FUEL`, `SMELT_ITEM`, `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, `RETREAT_FROM_HOSTILES`, and `DODGE_PROJECTILES` fail visibly unless the current state already satisfies the request.
 
 ## Movement Task Resume
 

@@ -17,6 +17,7 @@ public enum FriendTaskType {
     SLEEP_THROUGH_NIGHT,
     GET_OUT_OF_WATER,
     ESCAPE_LAVA,
+    CLEAR_LIQUID,
     PUT_OUT_FIRE,
     EQUIP_ARMOR,
     GET_ITEM,

@@ -48,6 +48,7 @@ Minecraft server tick 必须稳定运行。LLM 请求有网络延迟、费用、
 - `/staywithme mine <resource> [amount]`：执行第一版可行动采矿策略；已知资源会映射到可挖方块组，优先使用 PlayerEngine/Baritone mine process，失败时回落到本地生存交互。
 - `/staywithme attack` / `/staywithme fight`: attack one nearby hostile mob, preferring PlayerEngine `KillEntityTask` when available.
 - `/staywithme sleep` / `/staywithme night`: sleep through the night with PlayerEngine `SleepThroughNightTask`; daytime completes immediately.
+- `/staywithme clearliquid <x> <y> <z>` / `/staywithme clearwater <x> <y> <z>` / `/staywithme clearlava <x> <y> <z>`: clear a water or lava block at a concrete coordinate with PlayerEngine `ClearLiquidTask`, falling back to a carried throwaway block when reachable.
 - `/staywithme mineplan <resource> [amount]`：生成高层采矿远征 JSON 策略并写入长期记忆；LLM 未配置时使用本地原版策略 fallback。
 - `/staywithme expedition <resource> [amount]`：先生成远征策略，再启动当前可执行采矿 workflow；低层移动/挖掘仍由本地控制器和 PlayerEngine/Baritone 执行。
 - `/staywithme oreinfo <resource>`：异步询问 LLM 分析矿物/资源分布策略，返回 JSON 后写入长期记忆；LLM 未配置时使用本地 fallback。
@@ -444,7 +445,7 @@ Current Forge implementation:
 - PlayerEngine remains optional at runtime.
 - `FriendEntity` stays loadable without PlayerEngine.
 - When PlayerEngine is loaded, `FriendEntityFactory` reflects a `PlayerEngineFriendEntity` subclass that implements PlayerEngine inventory, interaction, and hunger provider interfaces.
-- `FriendPlayerEngineController` now creates a real `PlayerEngineController`, calls `TaskCatalogue.getItemTask(...)` for high-level acquisition, and wraps PlayerEngine tasks such as dropped item pickup, route building-material supply, furnace smelting, fuel collection, exploration, water/lava escape, fire block extinguishing, item handoff, inventory deposit, armor equip, farming/fishing, single-hostile combat, hostile retreat, creeper-specific retreat, projectile dodging, projectile walling, and continuous HeroTask protection.
+- `FriendPlayerEngineController` now creates a real `PlayerEngineController`, calls `TaskCatalogue.getItemTask(...)` for high-level acquisition, and wraps PlayerEngine tasks such as dropped item pickup, route building-material supply, furnace smelting, fuel collection, exploration, water/lava escape, coordinate liquid clearing, fire block extinguishing, item handoff, inventory deposit, armor equip, farming/fishing, single-hostile combat, hostile retreat, creeper-specific retreat, projectile dodging, projectile walling, and continuous HeroTask protection.
 - Movement/pathing/following/goto/returning/mining/acquisition/combat try PlayerEngine first when enabled, then fall back to Forge-native behavior.
 - PlayerEngine acquisition uses shared catalogue-name normalization for common user/LLM forms such as logs, sticks, ore blocks, raw mineral drops, lapis, quartz, and pickaxe aliases.
 - `/staywithme follow`, `/staywithme goto <x> <y> <z>`, and return-to-player requests now prefer PlayerEngine `FollowPlayerTask` / `GetToBlockTask` / `GetToEntityTask` before using Forge-native navigation fallback.
@@ -459,7 +460,9 @@ Current Forge implementation:
 - General fuel requests use a dedicated `COLLECT_FUEL` task type and `/staywithme fuel [count]`, backed by PlayerEngine `CollectFuelTask` when PlayerEngine is installed.
 - Explicit furnace smelting requests use `SMELT_ITEM` and `/staywithme smelt <target> [amount]`, backed by PlayerEngine `SmeltInFurnaceTask` for `iron_ingot`, `gold_ingot`, `copper_ingot`, and `charcoal`. Raw ore aliases such as `raw_iron` normalize to the expected output item.
 - Sleep/night requests use `SLEEP_THROUGH_NIGHT`, backed by PlayerEngine `SleepThroughNightTask` when the world is not already daytime.
-- Water and lava safety requests use `GET_OUT_OF_WATER` and `ESCAPE_LAVA`, backed by PlayerEngine `GetOutOfWaterTask` and `EscapeFromLavaTask`.
+- Water and lava safety requests use `GET_OUT_OF_WATER`, `ESCAPE_LAVA`, and `CLEAR_LIQUID`, backed by PlayerEngine `GetOutOfWaterTask`, `EscapeFromLavaTask`, and `ClearLiquidTask`. `CLEAR_LIQUID` targets concrete coordinates such as `10,64,-20` and has a limited Forge fallback that plugs reachable water/lava with a carried throwaway block.
+- Ordinary resource exploration and mining-expedition passage digging now try the same liquid-clearing path when a planned dig target has adjacent water/lava risk. If PlayerEngine or the limited reachable-block fallback cannot clear it, the old safety behavior remains: rotate away and remember/avoid the hazard.
+- Mining-expedition `DESCEND_TO_LAYER` now tries PlayerEngine `GetToYTask` once for the target Y band before opening a local staircase. If PlayerEngine cannot start or ends without reaching the band, the existing survival staircase up/down fallback continues.
 - Nearby fire-block requests use `PUT_OUT_FIRE`, backed by PlayerEngine `PutOutFireTask` when available, with a Forge fallback that moves into close reach before extinguishing `FIRE` or `SOUL_FIRE` blocks.
 - Generic get/craft tasks targeting registered mining resources now fall back to the local mining workflow, so broad requests such as `get cobblestone` or `get coal` are not treated as impossible crafting recipes when PlayerEngine is absent.
 - `/staywithme status` reports PlayerEngine runner/chain/acquisition diagnostics, including watchdog states that allow fallback when a PlayerEngine task chain becomes inactive without a finish callback.
