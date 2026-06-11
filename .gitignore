@@ -3,6 +3,8 @@ build/
 run/
 run-data/
 out/
+.tmp_player2npc/
+.tmp_playerengine/
 
 *.class
 *.log
