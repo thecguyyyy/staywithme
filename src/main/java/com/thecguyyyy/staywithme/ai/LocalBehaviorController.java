@@ -22,7 +22,6 @@ import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import com.thecguyyyy.staywithme.perception.FriendPerception;
 import com.thecguyyyy.staywithme.perception.PerceptionSnapshot;
 import com.thecguyyyy.staywithme.playerengine.FriendInteractionProvider;
-import com.thecguyyyy.staywithme.playerengine.PlayerEngineCatalogueNames;
 import com.thecguyyyy.staywithme.survival.SurvivalWorldInteractor;
 import com.thecguyyyy.staywithme.util.JsonUtils;
 import net.minecraft.core.BlockPos;
@@ -37,13 +36,11 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.tags.ItemTags;
-import net.minecraft.tags.TagKey;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Skeleton;
 import net.minecraft.world.food.FoodProperties;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameRules;
@@ -300,9 +297,7 @@ public class LocalBehaviorController {
     private BlockPos exploreTarget;
     private LongTaskWorkflow workflow;
     private boolean fuelCharcoalFallbackActive;
-    private String playerEngineAcquisitionName;
-    private int playerEngineAcquisitionAmount;
-    private boolean playerEngineAcquisitionAnnounced;
+    private final PlayerEngineTaskState playerEngineTaskState = new PlayerEngineTaskState();
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -546,9 +541,9 @@ public class LocalBehaviorController {
             case PICKUP_DROPPED_ITEM -> this.pickupDroppedItem(task);
             case SMELT_ITEM -> this.smeltItem(task);
             case GET_ITEM -> {
-                if (isFoodTarget(task.target())) {
+                if (LocalItemMatcher.isFoodTarget(task.target())) {
                     this.collectFood(task);
-                } else if (isMeatTarget(task.target())) {
+                } else if (LocalItemMatcher.isMeatTarget(task.target())) {
                     this.collectMeat(task);
                 } else {
                     this.executeWorkflowTask(task);
@@ -1012,7 +1007,7 @@ public class LocalBehaviorController {
         if (this.isWorkflowTask(task.type()) && this.createWorkflowFor(task) == null) {
             if ((task.type() == FriendTaskType.GET_ITEM || task.type() == FriendTaskType.CRAFT_ITEM)
                     && this.body.canUseHighLevelAcquisition()
-                    && this.toPlayerEngineCatalogueName(task.target()).isPresent()) {
+                    && PlayerEngineAcquisitionRequests.catalogueName(task.target()).isPresent()) {
                 return Optional.empty();
             }
             return Optional.of("I cannot rebuild the saved workflow: " + task.summary());
@@ -1141,7 +1136,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasPlaceBlockAtFinished(target.position(), target.blockTarget())) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -1154,13 +1149,7 @@ public class LocalBehaviorController {
         }
         if (this.body.canUseHighLevelAcquisition()
                 && this.body.placeBlockAt(target.position(), target.blockTarget())) {
-            this.playerEngineAcquisitionName = "place:" + target.blockTarget();
-            this.playerEngineAcquisitionAmount = 1;
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            if (!this.playerEngineAcquisitionAnnounced) {
-                this.sayThrottled("Using PlayerEngine to place " + target.blockTarget() + " at " + this.formatPos(target.position()) + ".");
-                this.playerEngineAcquisitionAnnounced = true;
-            }
+            this.startPlayerEngineTask("place:" + target.blockTarget(), 1, "Using PlayerEngine to place " + target.blockTarget() + " at " + this.formatPos(target.position()) + ".");
             return;
         }
 
@@ -1347,7 +1336,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("Building-material collection needs PlayerEngine right now; Forge fallback does not implement generic throwaway-block gathering.");
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasBuildingMaterialsCollectionFinished(requiredBlocks)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.isBuildingMaterialsSatisfied(task)) {
@@ -1364,13 +1353,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "building_materials";
-        this.playerEngineAcquisitionAmount = requiredBlocks;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to collect route building materials x" + requiredBlocks + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("building_materials", requiredBlocks, "Using PlayerEngine to collect route building materials x" + requiredBlocks + ".");
     }
 
     private boolean isBuildingMaterialsSatisfied(FriendTask task) {
@@ -1390,7 +1373,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("Food collection needs PlayerEngine right now. Ask for a specific food item if you want the local get/craft fallback.");
             return;
         }
-        if (this.playerEngineAcquisitionName != null && this.body.hasFoodCollectionFinished(requiredFoodUnits)) {
+        if (this.playerEngineTaskState.active() && this.body.hasFoodCollectionFinished(requiredFoodUnits)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.carriedFoodUnits() >= requiredFoodUnits) {
                 this.friend.getFriendBrain().completeTask();
@@ -1406,13 +1389,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "food";
-        this.playerEngineAcquisitionAmount = requiredFoodUnits;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to collect food units x" + requiredFoodUnits + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("food", requiredFoodUnits, "Using PlayerEngine to collect food units x" + requiredFoodUnits + ".");
     }
 
     private void collectMeat(FriendTask task) {
@@ -1427,7 +1404,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("Meat collection needs PlayerEngine right now; Forge fallback does not implement hunting.");
             return;
         }
-        if (this.playerEngineAcquisitionName != null && this.body.hasMeatCollectionFinished(requiredFoodUnits)) {
+        if (this.playerEngineTaskState.active() && this.body.hasMeatCollectionFinished(requiredFoodUnits)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.carriedMeatFoodUnits() >= requiredFoodUnits) {
                 this.friend.getFriendBrain().completeTask();
@@ -1443,13 +1420,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "meat";
-        this.playerEngineAcquisitionAmount = requiredFoodUnits;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to collect meat food units x" + requiredFoodUnits + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("meat", requiredFoodUnits, "Using PlayerEngine to collect meat food units x" + requiredFoodUnits + ".");
     }
 
     private void collectFuel(FriendTask task) {
@@ -1469,7 +1440,7 @@ public class LocalBehaviorController {
             this.executeFuelCharcoalFallback(task, requiredFuelItems, "PlayerEngine is unavailable");
             return;
         }
-        if ("fuel".equals(this.playerEngineAcquisitionName)
+        if (this.playerEngineTaskState.active("fuel")
                 && this.body.hasFuelCollectionFinished(requiredFuelItems)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.countCoalEquivalent() >= requiredFuelItems) {
@@ -1493,13 +1464,7 @@ public class LocalBehaviorController {
             );
             return;
         }
-        this.playerEngineAcquisitionName = "fuel";
-        this.playerEngineAcquisitionAmount = requiredFuelItems;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to collect fuel items x" + requiredFuelItems + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("fuel", requiredFuelItems, "Using PlayerEngine to collect fuel items x" + requiredFuelItems + ".");
     }
 
     private int fuelAmountForTask(FriendTask task) {
@@ -1542,7 +1507,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasSmeltItemFinished(target, amount)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.countSmeltOutput(target) >= amount) {
@@ -1567,13 +1532,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "smelt:" + target;
-        this.playerEngineAcquisitionAmount = amount;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine furnace smelting for " + target + " x" + amount + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("smelt:" + target, amount, "Using PlayerEngine furnace smelting for " + target + " x" + amount + ".");
     }
 
     private void fish(FriendTask task) {
@@ -1588,13 +1547,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "fish";
-        this.playerEngineAcquisitionAmount = 1;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to fish. Stop me when you have enough.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("fish", 1, "Using PlayerEngine to fish. Stop me when you have enough.");
     }
 
     private void farm(FriendTask task) {
@@ -1610,13 +1563,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "farm";
-        this.playerEngineAcquisitionAmount = range;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to farm nearby crops within range " + range + ". Stop me when you are done.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("farm", range, "Using PlayerEngine to farm nearby crops within range " + range + ". Stop me when you are done.");
     }
 
     private void explore(FriendTask task) {
@@ -1624,7 +1571,7 @@ public class LocalBehaviorController {
             return;
         }
         int distance = Math.max(8, Math.min(256, task == null || task.amount() <= 0 ? 48 : task.amount()));
-        if (this.playerEngineAcquisitionName != null && this.body.hasExploreFinished(distance)) {
+        if (this.playerEngineTaskState.active() && this.body.hasExploreFinished(distance)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
             this.exploreTarget = null;
@@ -1632,13 +1579,7 @@ public class LocalBehaviorController {
             return;
         }
         if (this.body.canUseHighLevelAcquisition() && this.body.explore(distance)) {
-            this.playerEngineAcquisitionName = "explore";
-            this.playerEngineAcquisitionAmount = distance;
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            if (!this.playerEngineAcquisitionAnnounced) {
-                this.sayThrottled("Using PlayerEngine to explore about " + distance + " blocks away.");
-                this.playerEngineAcquisitionAnnounced = true;
-            }
+            this.startPlayerEngineTask("explore", distance, "Using PlayerEngine to explore about " + distance + " blocks away.");
             return;
         }
 
@@ -1707,7 +1648,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null && this.body.hasSleepThroughNightFinished()) {
+        if (this.playerEngineTaskState.active() && this.body.hasSleepThroughNightFinished()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
             this.friend.getFriendBrain().completeTask();
@@ -1724,13 +1665,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "sleep_through_night";
-        this.playerEngineAcquisitionAmount = 1;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to sleep through the night.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("sleep_through_night", 1, "Using PlayerEngine to sleep through the night.");
     }
 
     private static boolean isDaytime(ServerLevel level) {
@@ -1755,7 +1690,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("I cannot find a dry reachable stand position nearby.");
             return;
         }
-        if (this.playerEngineAcquisitionName != null && this.body.hasGetOutOfWaterFinished()) {
+        if (this.playerEngineTaskState.active() && this.body.hasGetOutOfWaterFinished()) {
             this.resetPlayerEngineAcquisitionState();
             if (!this.friend.isInWater() && this.friend.onGround()) {
                 this.friend.getFriendBrain().completeTask();
@@ -1777,13 +1712,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("PlayerEngine water escape did not start: " + status + ".");
             return;
         }
-        this.playerEngineAcquisitionName = "get_out_of_water";
-        this.playerEngineAcquisitionAmount = 0;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to get out of water.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("get_out_of_water", 0, "Using PlayerEngine to get out of water.");
     }
 
     private boolean tryForgeGetOutOfWater(ServerLevel level) {
@@ -1814,7 +1743,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("I cannot find a reachable lava-safe stand position nearby.");
             return;
         }
-        if (this.playerEngineAcquisitionName != null && this.body.hasEscapeLavaFinished()) {
+        if (this.playerEngineTaskState.active() && this.body.hasEscapeLavaFinished()) {
             this.resetPlayerEngineAcquisitionState();
             if (!this.friend.isInLava() && !this.friend.isOnFire()) {
                 this.friend.getFriendBrain().completeTask();
@@ -1835,13 +1764,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("PlayerEngine lava escape did not start: " + status + ".");
             return;
         }
-        this.playerEngineAcquisitionName = "escape_lava";
-        this.playerEngineAcquisitionAmount = 0;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to escape lava.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("escape_lava", 0, "Using PlayerEngine to escape lava.");
     }
 
     private boolean tryForgeEscapeLava(ServerLevel level) {
@@ -1874,7 +1797,7 @@ public class LocalBehaviorController {
             return;
         }
 
-        if ("clear_liquid".equals(this.playerEngineAcquisitionName)) {
+        if (this.playerEngineTaskState.active("clear_liquid")) {
             if (this.body.hasClearLiquidFinished(liquidPos)) {
                 this.body.stop();
                 this.resetPlayerEngineAcquisitionState();
@@ -1890,13 +1813,7 @@ public class LocalBehaviorController {
         }
 
         if (this.body.canUseHighLevelAcquisition() && this.body.clearLiquid(liquidPos)) {
-            this.playerEngineAcquisitionName = "clear_liquid";
-            this.playerEngineAcquisitionAmount = 1;
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            if (!this.playerEngineAcquisitionAnnounced) {
-                this.sayThrottled("Using PlayerEngine to clear liquid at " + this.formatPos(liquidPos) + ".");
-                this.playerEngineAcquisitionAnnounced = true;
-            }
+            this.startPlayerEngineTask("clear_liquid", 1, "Using PlayerEngine to clear liquid at " + this.formatPos(liquidPos) + ".");
             return;
         }
 
@@ -2012,7 +1929,7 @@ public class LocalBehaviorController {
         int range = Math.max(1, Math.min(32, task == null || task.amount() <= 0 ? 8 : task.amount()));
         LocalBlockSafetyFallback.FireTargetSelection selection = this.blockSafetyFallback.selectFireTarget(serverLevel, range);
         if (selection.previousTargetCleared()
-                && "put_out_fire".equals(this.playerEngineAcquisitionName)) {
+                && this.playerEngineTaskState.active("put_out_fire")) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
         }
@@ -2025,7 +1942,7 @@ public class LocalBehaviorController {
             return;
         }
 
-        if ("put_out_fire".equals(this.playerEngineAcquisitionName)) {
+        if (this.playerEngineTaskState.active("put_out_fire")) {
             if (this.body.hasPutOutFireFinished(fireTarget.get())) {
                 this.body.stop();
                 this.resetPlayerEngineAcquisitionState();
@@ -2043,13 +1960,7 @@ public class LocalBehaviorController {
         }
 
         if (this.body.canUseHighLevelAcquisition() && this.body.putOutFire(fireTarget.get())) {
-            this.playerEngineAcquisitionName = "put_out_fire";
-            this.playerEngineAcquisitionAmount = range;
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            if (!this.playerEngineAcquisitionAnnounced) {
-                this.sayThrottled("Using PlayerEngine to put out nearby fire.");
-                this.playerEngineAcquisitionAnnounced = true;
-            }
+            this.startPlayerEngineTask("put_out_fire", range, "Using PlayerEngine to put out nearby fire.");
             return;
         }
 
@@ -2064,7 +1975,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null && this.body.hasArmorEquipmentFinished(target)) {
+        if (this.playerEngineTaskState.active() && this.body.hasArmorEquipmentFinished(target)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
             if (this.armorEquipFallback.equip(target)) {
@@ -2099,13 +2010,7 @@ public class LocalBehaviorController {
                     + ".");
             return;
         }
-        this.playerEngineAcquisitionName = "equip_armor";
-        this.playerEngineAcquisitionAmount = 1;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to equip armor: " + target + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("equip_armor", 1, "Using PlayerEngine to equip armor: " + target + ".");
     }
 
     private void giveItemToPlayer(FriendTask task) {
@@ -2114,7 +2019,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("I need an item target before I can give items.");
             return;
         }
-        if (isFoodTarget(target) || isMeatTarget(target)) {
+        if (LocalItemMatcher.isFoodTarget(target) || LocalItemMatcher.isMeatTarget(target)) {
             this.friend.getFriendBrain().failTask("Giving items needs a concrete item target such as bread, cooked_beef, or torch.");
             return;
         }
@@ -2129,7 +2034,7 @@ public class LocalBehaviorController {
         }
 
         int amount = Math.max(1, task.amount());
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasGiveItemFinished(playerName, target, amount)) {
             String status = this.body.highLevelAcquisitionStatus();
             this.body.stop();
@@ -2158,13 +2063,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "give:" + target;
-        this.playerEngineAcquisitionAmount = amount;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to give " + target + " x" + amount + " to " + playerName + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("give:" + target, amount, "Using PlayerEngine to give " + target + " x" + amount + " to " + playerName + ".");
     }
 
     private void pickupDroppedItem(FriendTask task) {
@@ -2180,7 +2079,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasPickupDroppedItemFinished(target, amount)) {
             this.resetPlayerEngineAcquisitionState();
             if (this.isPickupDroppedItemSatisfied(task)) {
@@ -2203,24 +2102,18 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "pickup:" + target;
-        this.playerEngineAcquisitionAmount = amount;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to pick up dropped " + target + " x" + amount + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("pickup:" + target, amount, "Using PlayerEngine to pick up dropped " + target + " x" + amount + ".");
     }
 
     private boolean isPickupDroppedItemSatisfied(FriendTask task) {
         if (task == null || task.target() == null || task.target().isBlank()) {
             return false;
         }
-        return this.friend.countInventoryItems(this.recipeMatcherFor(task.target())) >= Math.max(1, task.amount());
+        return this.friend.countInventoryItems(LocalItemMatcher.recipeMatcherFor(task.target())) >= Math.max(1, task.amount());
     }
 
     private void depositInventory(FriendTask task) {
-        if (this.playerEngineAcquisitionName != null && this.body.hasDepositInventoryFinished()) {
+        if (this.playerEngineTaskState.active() && this.body.hasDepositInventoryFinished()) {
             String status = this.body.highLevelAcquisitionStatus();
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -2244,13 +2137,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "deposit_inventory";
-        this.playerEngineAcquisitionAmount = 0;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to deposit non-tool inventory into a container.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("deposit_inventory", 0, "Using PlayerEngine to deposit non-tool inventory into a container.");
     }
 
     private void executeWorkflowTask(FriendTask task) {
@@ -2289,7 +2176,7 @@ public class LocalBehaviorController {
     }
 
     private boolean tryRunPlayerEngineAcquisition(ServerLevel level, FriendTask task) {
-        Optional<PlayerEngineAcquisitionRequest> request = this.playerEngineAcquisitionRequest(task);
+        Optional<PlayerEngineAcquisitionRequest> request = PlayerEngineAcquisitionRequests.from(task);
         if (request.isEmpty()) {
             return false;
         }
@@ -2321,7 +2208,7 @@ public class LocalBehaviorController {
         if (!this.body.canUseHighLevelAcquisition()) {
             return false;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasAcquisitionFinished(catalogueName, count)) {
             this.resetPlayerEngineAcquisitionState();
             return false;
@@ -2333,13 +2220,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return false;
         }
-        this.playerEngineAcquisitionName = catalogueName;
-        this.playerEngineAcquisitionAmount = count;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to get " + catalogueName + " x" + count + " for " + label + ".");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask(catalogueName, count, "Using PlayerEngine to get " + catalogueName + " x" + count + " for " + label + ".");
         return true;
     }
 
@@ -2353,50 +2234,24 @@ public class LocalBehaviorController {
         this.friend.getFriendBrain().completeTask();
     }
 
-    private Optional<PlayerEngineAcquisitionRequest> playerEngineAcquisitionRequest(FriendTask task) {
-        if (task == null) {
-            return Optional.empty();
-        }
-        int amount = Math.max(1, task.amount());
-        return switch (task.type()) {
-            case GET_ITEM, CRAFT_ITEM -> this.toPlayerEngineCatalogueName(task.target())
-                    .map(name -> new PlayerEngineAcquisitionRequest(name, amount));
-            case MINE_RESOURCE -> MiningTargetRegistry.find(task.target())
-                    .flatMap(target -> this.toPlayerEngineCatalogueName(target.resourceId()))
-                    .or(() -> this.toPlayerEngineCatalogueName(task.target()))
-                    .map(name -> new PlayerEngineAcquisitionRequest(name, amount));
-            case MINING_EXPEDITION -> MiningTargetRegistry.find(task.target())
-                    .flatMap(target -> this.toPlayerEngineCatalogueName(target.resourceId()))
-                    .map(name -> new PlayerEngineAcquisitionRequest(name, amount));
-            case MAKE_CRAFTING_TABLE -> Optional.of(new PlayerEngineAcquisitionRequest("crafting_table", 1));
-            case MAKE_STICKS -> Optional.of(new PlayerEngineAcquisitionRequest("stick", Math.max(4, amount)));
-            case MAKE_CHEST -> Optional.of(new PlayerEngineAcquisitionRequest("chest", 1));
-            case MAKE_WOODEN_AXE -> Optional.of(new PlayerEngineAcquisitionRequest("wooden_axe", 1));
-            case MAKE_WOODEN_PICKAXE -> Optional.of(new PlayerEngineAcquisitionRequest("wooden_pickaxe", 1));
-            case MAKE_STONE_PICKAXE -> Optional.of(new PlayerEngineAcquisitionRequest("stone_pickaxe", 1));
-            case MAKE_FURNACE -> Optional.of(new PlayerEngineAcquisitionRequest("furnace", 1));
-            case MAKE_IRON_INGOT -> Optional.of(new PlayerEngineAcquisitionRequest("iron_ingot", 1));
-            case MAKE_IRON_PICKAXE -> Optional.of(new PlayerEngineAcquisitionRequest("iron_pickaxe", 1));
-            default -> Optional.empty();
-        };
-    }
-
-    private Optional<String> toPlayerEngineCatalogueName(String rawTarget) {
-        if (rawTarget == null || rawTarget.isBlank()) {
-            return Optional.empty();
-        }
-        String normalized = PlayerEngineCatalogueNames.normalize(rawTarget);
-        return normalized.isBlank() ? Optional.empty() : Optional.of(normalized);
-    }
-
     private void resetPlayerEngineAcquisitionState() {
         boolean wasConstructionRestock = this.isConstructionMaterialRestockActive();
-        this.playerEngineAcquisitionName = null;
-        this.playerEngineAcquisitionAmount = 0;
-        this.playerEngineAcquisitionAnnounced = false;
+        this.playerEngineTaskState.reset();
         if (wasConstructionRestock) {
             this.resetConstructionMaterialRestockState();
         }
+    }
+
+    private void announcePlayerEngineTask(String message) {
+        this.playerEngineTaskState.announce(this::sayThrottled, message);
+    }
+
+    private void startPlayerEngineTask(String stateName, int amount, String message) {
+        this.startPlayerEngineTask(stateName, amount, FriendState.EXECUTING_TASK, message);
+    }
+
+    private void startPlayerEngineTask(String stateName, int amount, FriendState state, String message) {
+        this.playerEngineTaskState.startTask(stateName, amount, this.friend, state, this::sayThrottled, message);
     }
 
     private boolean handleMiningExpeditionSafety(ServerLevel serverLevel, FriendTask task, PerceptionSnapshot snapshot) {
@@ -2756,14 +2611,14 @@ public class LocalBehaviorController {
         return switch (task.type()) {
             case GET_ITEM, CRAFT_ITEM -> task.target() != null
                     && !task.target().isBlank()
-                    && this.friend.countInventoryItems(this.recipeMatcherFor(task.target())) >= amount;
+                    && this.friend.countInventoryItems(LocalItemMatcher.recipeMatcherFor(task.target())) >= amount;
             case MINE_RESOURCE -> {
                 if (this.isTaskTargetSatisfied(task)) {
                     yield true;
                 }
                 yield task.target() != null
                         && !task.target().isBlank()
-                        && this.friend.countInventoryItems(this.recipeMatcherFor(task.target())) >= amount;
+                        && this.friend.countInventoryItems(LocalItemMatcher.recipeMatcherFor(task.target())) >= amount;
             }
             case MINING_EXPEDITION -> this.isTaskTargetSatisfied(task);
             case MAKE_CRAFTING_TABLE -> this.hasCraftingTable();
@@ -2833,7 +2688,7 @@ public class LocalBehaviorController {
             if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
                 return null;
             }
-            return this.craftingPlannerTargetId(task.target())
+            return LocalItemMatcher.craftingPlannerTargetId(task.target())
                     .flatMap(target -> VanillaCraftingPlanner.plan(serverLevel, target, Math.max(1, task.amount())))
                     .orElse(null);
         }
@@ -3335,21 +3190,21 @@ public class LocalBehaviorController {
 
     private Optional<ConstructionTravelResult> tickRemotePlayerEngineTravel(BlockPos target, String label, boolean moveStalled) {
         if (!this.body.canUseHighLevelAcquisition()) {
-            if ("remote_goto".equals(this.playerEngineAcquisitionName)) {
+            if (this.playerEngineTaskState.active("remote_goto")) {
                 this.resetPlayerEngineAcquisitionState();
                 this.remotePlayerEngineTravelAttempted = true;
             }
             return Optional.empty();
         }
         if (this.isConstructionMaterialRestockActive()
-                || (this.playerEngineAcquisitionName != null
-                && !"remote_goto".equals(this.playerEngineAcquisitionName))) {
+                || (this.playerEngineTaskState.active()
+                && !this.playerEngineTaskState.active("remote_goto"))) {
             return Optional.empty();
         }
 
         String normalizedLabel = this.normalizedRemotePlayerEngineTravelLabel(label);
         if (!this.isSameRemotePlayerEngineTravel(target, normalizedLabel)) {
-            if ("remote_goto".equals(this.playerEngineAcquisitionName)) {
+            if (this.playerEngineTaskState.active("remote_goto")) {
                 this.body.stop();
                 this.resetPlayerEngineAcquisitionState();
             }
@@ -3358,7 +3213,7 @@ public class LocalBehaviorController {
             this.remotePlayerEngineTravelLabel = normalizedLabel;
         }
 
-        if ("remote_goto".equals(this.playerEngineAcquisitionName)) {
+        if (this.playerEngineTaskState.active("remote_goto")) {
             String status = this.body.highLevelAcquisitionStatus();
             if (this.body.hasGoToBlockFinished(target, REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH)
                     || this.isRemotePlayerEngineGoToFinished(target, status)) {
@@ -3424,11 +3279,10 @@ public class LocalBehaviorController {
             return Optional.empty();
         }
 
-        this.playerEngineAcquisitionName = "remote_goto";
-        this.playerEngineAcquisitionAmount = 0;
-        this.playerEngineAcquisitionAnnounced = true;
-        this.friend.setFriendState(FriendState.RETURNING);
-        this.sayThrottled(
+        this.startPlayerEngineTask(
+                "remote_goto",
+                0,
+                FriendState.RETURNING,
                 "Using PlayerEngine goto for "
                         + normalizedLabel
                         + " before constructing a route."
@@ -3850,7 +3704,7 @@ public class LocalBehaviorController {
                     VANILLA_IRON_ORES
             );
         }
-        Predicate<ItemStack> matcher = this.recipeMatcherFor(step.target());
+        Predicate<ItemStack> matcher = LocalItemMatcher.recipeMatcherFor(step.target());
         if (this.friend.countInventoryItems(matcher) >= step.amount()) {
             this.workflow.completeCurrent("already in inventory");
             return true;
@@ -3883,7 +3737,7 @@ public class LocalBehaviorController {
         if (miningTarget.isPresent()) {
             return Optional.of(miningTarget.get().inventoryMatcher());
         }
-        return Optional.of(this.recipeMatcherFor(target));
+        return Optional.of(LocalItemMatcher.recipeMatcherFor(target));
     }
 
     private boolean executeCraftItemStep(ServerLevel serverLevel, WorkStep step) {
@@ -4004,8 +3858,8 @@ public class LocalBehaviorController {
             this.descendPlayerEngineAttempted = false;
         }
 
-        if ("goto_y".equals(this.playerEngineAcquisitionName)
-                && this.playerEngineAcquisitionAmount == targetY) {
+        if (this.playerEngineTaskState.active("goto_y")
+                && this.playerEngineTaskState.amount() == targetY) {
             if (!this.body.hasGoToYLevelFinished(targetY)) {
                 this.friend.setFriendState(FriendState.EXECUTING_TASK);
                 step.running("PlayerEngine moving to Y " + targetY);
@@ -4030,14 +3884,12 @@ public class LocalBehaviorController {
             return false;
         }
 
-        this.playerEngineAcquisitionName = "goto_y";
-        this.playerEngineAcquisitionAmount = targetY;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
+        this.startPlayerEngineTask(
+                "goto_y",
+                targetY,
+                "Using PlayerEngine to reach mining Y layer " + targetY + " before local staircase fallback."
+        );
         step.running("PlayerEngine moving to Y " + targetY);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to reach mining Y layer " + targetY + " before local staircase fallback.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
         return true;
     }
 
@@ -4423,7 +4275,7 @@ public class LocalBehaviorController {
     }
 
     private boolean executeDynamicCraftStep(ServerLevel serverLevel, WorkStep step) {
-        Predicate<ItemStack> matcher = this.recipeMatcherFor(step.target());
+        Predicate<ItemStack> matcher = LocalItemMatcher.recipeMatcherFor(step.target());
         return this.executeRecipeCraftStep(
                 serverLevel,
                 step,
@@ -6979,11 +6831,11 @@ public class LocalBehaviorController {
     }
 
     private boolean isConstructionMaterialRestockActive() {
-        return "construction_building_materials".equals(this.playerEngineAcquisitionName);
+        return this.playerEngineTaskState.active("construction_building_materials");
     }
 
     private boolean tickConstructionMaterialRestock(String label) {
-        if (this.playerEngineAcquisitionName != null && !this.isConstructionMaterialRestockActive()) {
+        if (this.playerEngineTaskState.active() && !this.isConstructionMaterialRestockActive()) {
             return false;
         }
         if (!this.isConstructionMaterialRestockActive() && this.countConstructionRepairBlocks() > 0) {
@@ -7011,13 +6863,7 @@ public class LocalBehaviorController {
 
         this.constructionMaterialRestockTarget = target;
         this.constructionMaterialRestockLabel = label == null || label.isBlank() ? "construction route" : label;
-        this.playerEngineAcquisitionName = "construction_building_materials";
-        this.playerEngineAcquisitionAmount = target;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("I need route blocks, so I am using PlayerEngine to collect building materials.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("construction_building_materials", target, "I need route blocks, so I am using PlayerEngine to collect building materials.");
         return true;
     }
 
@@ -7705,7 +7551,7 @@ public class LocalBehaviorController {
 
     private int craftExpeditionTorchesFromSupplyChest(ServerLevel level, Container chest) {
         int crafted = 0;
-        Predicate<ItemStack> torchMatcher = this.recipeMatcherFor(WorkflowFactory.TORCH);
+        Predicate<ItemStack> torchMatcher = LocalItemMatcher.recipeMatcherFor(WorkflowFactory.TORCH);
         while (this.countTorches() < EXPEDITION_RESTOCK_TORCH_TARGET
                 && this.countContainerItems(chest, this::isTorchCraftingFuel) > 0
                 && this.ensureSupplyChestSticks(level, chest, 1)) {
@@ -7748,7 +7594,7 @@ public class LocalBehaviorController {
             }
             CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOne(
                     level,
-                    this.recipeMatcherFor(WorkflowFactory.STICKS),
+                    LocalItemMatcher.recipeMatcherFor(WorkflowFactory.STICKS),
                     2
             );
             if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
@@ -7850,7 +7696,7 @@ public class LocalBehaviorController {
 
         CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOneWithBestContext(
                 level,
-                this.recipeMatcherFor(pickaxeTarget),
+                LocalItemMatcher.recipeMatcherFor(pickaxeTarget),
                 this.craftingStationTarget
         );
         if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
@@ -7893,7 +7739,7 @@ public class LocalBehaviorController {
 
         CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOneWithBestContext(
                 level,
-                this.recipeMatcherFor(WorkflowFactory.FURNACE),
+                LocalItemMatcher.recipeMatcherFor(WorkflowFactory.FURNACE),
                 this.craftingStationTarget
         );
         if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
@@ -7939,7 +7785,7 @@ public class LocalBehaviorController {
         }
         CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOneWithBestContext(
                 level,
-                this.recipeMatcherFor(WorkflowFactory.CHEST),
+                LocalItemMatcher.recipeMatcherFor(WorkflowFactory.CHEST),
                 this.craftingStationTarget
         );
         if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
@@ -8015,7 +7861,7 @@ public class LocalBehaviorController {
             }
             CraftingActionAdapter.CraftResult result = this.craftingAdapter.craftOne(
                     level,
-                    this.recipeMatcherFor(WorkflowFactory.CRAFTING_TABLE),
+                    LocalItemMatcher.recipeMatcherFor(WorkflowFactory.CRAFTING_TABLE),
                     2
             );
             if (result != CraftingActionAdapter.CraftResult.CRAFTED) {
@@ -9890,7 +9736,7 @@ public class LocalBehaviorController {
     private boolean workflowNeedsCraftingStation(ServerLevel level) {
         return this.workflow != null && this.workflow.hasPendingStep(step ->
                 step.type() == WorkStepType.CRAFT_ITEM
-                        && this.craftingAdapter.requiresCraftingTable(level, this.recipeMatcherFor(step.target())));
+                        && this.craftingAdapter.requiresCraftingTable(level, LocalItemMatcher.recipeMatcherFor(step.target())));
     }
 
     private boolean workflowOutputSatisfied() {
@@ -9902,7 +9748,7 @@ public class LocalBehaviorController {
                 && (task.type() == FriendTaskType.GET_ITEM || task.type() == FriendTaskType.CRAFT_ITEM)
                 && task.target() != null
                 && !task.target().isBlank()) {
-            Predicate<ItemStack> matcher = this.recipeMatcherFor(task.target());
+            Predicate<ItemStack> matcher = LocalItemMatcher.recipeMatcherFor(task.target());
             return this.friend.countInventoryItems(matcher) >= Math.max(1, task.amount());
         }
         if (task != null && task.type() == FriendTaskType.COLLECT_FUEL) {
@@ -9940,99 +9786,6 @@ public class LocalBehaviorController {
         return this.workflow == null ? "none" : this.workflow.summary();
     }
 
-    private Predicate<ItemStack> recipeMatcherFor(String target) {
-        String key = inventoryMatcherKey(target);
-        return switch (key) {
-            case "log", "logs", "wood", "woods" -> stack -> stack.is(ItemTags.LOGS);
-            case "plank", "planks" -> stack -> stack.is(ItemTags.PLANKS);
-            case "leaf", "leaves" -> stack -> this.isBlockItemInTag(stack, BlockTags.LEAVES);
-            case "crafting_table", "crafting_tables" -> stack -> stack.is(Items.CRAFTING_TABLE);
-            case "stick", "sticks" -> stack -> stack.is(Items.STICK);
-            case "chest", "chests" -> stack -> stack.is(Items.CHEST);
-            case "wooden_axe", "wood_axe", "wooden_axes", "wood_axes" -> stack -> stack.is(Items.WOODEN_AXE);
-            case "wooden_pick", "wood_pick", "wood_pickaxe", "wooden_pickaxe", "wood_picks", "wood_pickaxes", "wooden_pickaxes" -> stack -> stack.is(Items.WOODEN_PICKAXE);
-            case "cobble", "cobbles", "cobblestone" -> stack -> stack.is(Items.COBBLESTONE);
-            case "stone_pick", "stone_pickaxe", "stone_picks", "stone_pickaxes" -> stack -> stack.is(Items.STONE_PICKAXE);
-            case "furnace", "furnaces" -> stack -> stack.is(Items.FURNACE);
-            case "coal", "coal_ore", "deepslate_coal_ore" -> this::isCoalEquivalent;
-            case "charcoal" -> stack -> stack.is(Items.CHARCOAL);
-            case "raw_iron", "iron", "iron_ore", "deepslate_iron_ore" -> stack -> stack.is(Items.RAW_IRON);
-            case "iron_ingot" -> stack -> stack.is(Items.IRON_INGOT);
-            case "iron_pick", "iron_pickaxe", "iron_picks", "iron_pickaxes" -> stack -> stack.is(Items.IRON_PICKAXE);
-            case "raw_gold", "gold", "gold_ore", "deepslate_gold_ore" -> stack -> stack.is(Items.RAW_GOLD);
-            case "raw_copper", "copper", "copper_ore", "deepslate_copper_ore" -> stack -> stack.is(Items.RAW_COPPER);
-            case "diamond", "diamond_ore", "deepslate_diamond_ore" -> stack -> stack.is(Items.DIAMOND);
-            case "emerald", "emerald_ore", "deepslate_emerald_ore" -> stack -> stack.is(Items.EMERALD);
-            case "redstone", "redstone_ore", "deepslate_redstone_ore" -> stack -> stack.is(Items.REDSTONE);
-            case "lapis", "lapis_lazuli", "lapis_ore", "deepslate_lapis_ore" -> stack -> stack.is(Items.LAPIS_LAZULI);
-            case "quartz", "nether_quartz", "nether_quartz_ore", "quartz_ore" -> stack -> stack.is(Items.QUARTZ);
-            case "gold_pick", "gold_pickaxe", "gold_picks", "gold_pickaxes", "golden_pickaxe", "golden_pickaxes" -> stack -> stack.is(Items.GOLDEN_PICKAXE);
-            case "torch", "torches" -> stack -> stack.is(Items.TORCH);
-            default -> this.parseItemId(target)
-                    .<Predicate<ItemStack>>map(id -> stack -> !stack.isEmpty()
-                            && id.equals(BuiltInRegistries.ITEM.getKey(stack.getItem())))
-                    .orElse(stack -> false);
-        };
-    }
-
-    private static String inventoryMatcherKey(String target) {
-        if (target == null) {
-            return "";
-        }
-        String normalized = target.trim().toLowerCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
-        int namespace = normalized.indexOf(':');
-        if (namespace >= 0 && namespace + 1 < normalized.length()) {
-            normalized = normalized.substring(namespace + 1);
-        }
-        return normalized;
-    }
-
-    private static boolean isFoodTarget(String target) {
-        String key = inventoryMatcherKey(target);
-        return "food".equals(key) || "foods".equals(key);
-    }
-
-    private static boolean isMeatTarget(String target) {
-        String key = inventoryMatcherKey(target);
-        return "meat".equals(key) || "meats".equals(key);
-    }
-
-    private boolean isBlockItemInTag(ItemStack stack, TagKey<Block> tag) {
-        return !stack.isEmpty()
-                && stack.getItem() instanceof BlockItem blockItem
-                && blockItem.getBlock().defaultBlockState().is(tag);
-    }
-
-    private Optional<ResourceLocation> parseItemId(String rawTarget) {
-        if (rawTarget == null || rawTarget.isBlank()) {
-            return Optional.empty();
-        }
-        String normalized = rawTarget.contains(":") ? rawTarget.trim() : "minecraft:" + rawTarget.trim();
-        return Optional.ofNullable(ResourceLocation.tryParse(normalized));
-    }
-
-    private Optional<ResourceLocation> craftingPlannerTargetId(String rawTarget) {
-        String key = inventoryMatcherKey(rawTarget);
-        String alias = switch (key) {
-            case "log", "logs", "wood", "woods" -> WorkflowFactory.LOGS;
-            case "plank", "planks" -> WorkflowFactory.PLANKS;
-            case "stick", "sticks" -> "minecraft:stick";
-            case "torch", "torches" -> WorkflowFactory.TORCH;
-            case "crafting_table", "crafting_tables" -> WorkflowFactory.CRAFTING_TABLE;
-            case "wooden_axe", "wood_axe", "wooden_axes", "wood_axes" -> WorkflowFactory.WOODEN_AXE;
-            case "wooden_pick", "wood_pick", "wood_pickaxe", "wooden_pickaxe", "wood_picks", "wood_pickaxes", "wooden_pickaxes" -> WorkflowFactory.WOODEN_PICKAXE;
-            case "stone_pick", "stone_pickaxe", "stone_picks", "stone_pickaxes" -> WorkflowFactory.STONE_PICKAXE;
-            case "iron_pick", "iron_pickaxe", "iron_picks", "iron_pickaxes" -> WorkflowFactory.IRON_PICKAXE;
-            case "furnace", "furnaces" -> WorkflowFactory.FURNACE;
-            case "chest", "chests" -> WorkflowFactory.CHEST;
-            default -> null;
-        };
-        if (alias != null) {
-            return Optional.ofNullable(ResourceLocation.tryParse(alias));
-        }
-        return this.parseItemId(rawTarget);
-    }
-
     private String craftingStationSummary() {
         return this.craftingStationTarget == null ? "none" : this.formatPos(this.craftingStationTarget);
     }
@@ -10044,7 +9797,7 @@ public class LocalBehaviorController {
     private String remotePlayerEngineTravelSummary() {
         if (this.remotePlayerEngineTravelTarget == null
                 && !this.remotePlayerEngineTravelAttempted
-                && !"remote_goto".equals(this.playerEngineAcquisitionName)) {
+                && !this.playerEngineTaskState.active("remote_goto")) {
             return "none";
         }
         return "target="
@@ -10054,7 +9807,7 @@ public class LocalBehaviorController {
                 + ",attempted="
                 + this.remotePlayerEngineTravelAttempted
                 + ",active="
-                + "remote_goto".equals(this.playerEngineAcquisitionName);
+                + this.playerEngineTaskState.active("remote_goto");
     }
 
     private String resourceExploreSummary() {
@@ -10614,13 +10367,7 @@ public class LocalBehaviorController {
             this.resetPlayerEngineAcquisitionState();
             return;
         }
-        this.playerEngineAcquisitionName = "protect_player";
-        this.playerEngineAcquisitionAmount = 0;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to protect the nearby area until stopped.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("protect_player", 0, "Using PlayerEngine to protect the nearby area until stopped.");
     }
 
     private void retreatFromHostiles(FriendTask task) {
@@ -10632,7 +10379,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasRetreatFromHostilesFinished(distance)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -10667,13 +10414,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("PlayerEngine hostile retreat did not start: " + status + ".");
             return;
         }
-        this.playerEngineAcquisitionName = "retreat_hostiles";
-        this.playerEngineAcquisitionAmount = distance;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to retreat from nearby hostile mobs.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("retreat_hostiles", distance, "Using PlayerEngine to retreat from nearby hostile mobs.");
     }
 
     private void retreatFromCreepers(FriendTask task) {
@@ -10685,7 +10426,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasRetreatFromCreepersFinished(distance)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -10697,13 +10438,7 @@ public class LocalBehaviorController {
             return;
         }
         if (this.body.canUseHighLevelAcquisition() && this.body.retreatFromCreepers(distance)) {
-            this.playerEngineAcquisitionName = "retreat_creepers";
-            this.playerEngineAcquisitionAmount = distance;
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            if (!this.playerEngineAcquisitionAnnounced) {
-                this.sayThrottled("Using PlayerEngine to retreat from nearby creepers.");
-                this.playerEngineAcquisitionAnnounced = true;
-            }
+            this.startPlayerEngineTask("retreat_creepers", distance, "Using PlayerEngine to retreat from nearby creepers.");
             return;
         }
         if (this.threatSafetyFallback.tryRetreatFromThreat(creeper.get(), distance, TASK_SPEED)) {
@@ -10717,7 +10452,7 @@ public class LocalBehaviorController {
     private void dodgeProjectiles(FriendTask task) {
         int horizontalDistance = Math.max(1, task == null || task.amount() <= 0 ? 4 : task.amount());
         int verticalDistance = 3;
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasDodgeProjectilesFinished(horizontalDistance, verticalDistance)) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -10758,13 +10493,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("PlayerEngine projectile dodge did not start: " + status + ".");
             return;
         }
-        this.playerEngineAcquisitionName = "dodge_projectiles";
-        this.playerEngineAcquisitionAmount = horizontalDistance;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to dodge incoming projectiles.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("dodge_projectiles", horizontalDistance, "Using PlayerEngine to dodge incoming projectiles.");
     }
 
     private void projectileProtectionWall(FriendTask task) {
@@ -10777,7 +10506,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.playerEngineAcquisitionName != null
+        if (this.playerEngineTaskState.active()
                 && this.body.hasProjectileProtectionWallFinished()) {
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -10813,13 +10542,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("PlayerEngine projectile protection wall did not start: " + status + ".");
             return;
         }
-        this.playerEngineAcquisitionName = "projectile_wall";
-        this.playerEngineAcquisitionAmount = range;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to build a projectile protection wall.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask("projectile_wall", range, "Using PlayerEngine to build a projectile protection wall.");
     }
 
     private void attackNearbyHostile() {
@@ -10867,7 +10590,7 @@ public class LocalBehaviorController {
             return false;
         }
         String signature = "attack:" + target.getUUID();
-        if (this.playerEngineAcquisitionName != null && this.body.hasAttackTargetFinished(target)) {
+        if (this.playerEngineTaskState.active() && this.body.hasAttackTargetFinished(target)) {
             String status = this.body.highLevelAcquisitionStatus();
             this.body.stop();
             this.resetPlayerEngineAcquisitionState();
@@ -10885,18 +10608,12 @@ public class LocalBehaviorController {
             return false;
         }
         if (!this.body.attackTarget(target)) {
-            if (this.playerEngineAcquisitionName != null && this.playerEngineAcquisitionName.equals(signature)) {
+            if (this.playerEngineTaskState.active(signature)) {
                 this.resetPlayerEngineAcquisitionState();
             }
             return false;
         }
-        this.playerEngineAcquisitionName = signature;
-        this.playerEngineAcquisitionAmount = 0;
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        if (!this.playerEngineAcquisitionAnnounced) {
-            this.sayThrottled("Using PlayerEngine to attack the nearby hostile.");
-            this.playerEngineAcquisitionAnnounced = true;
-        }
+        this.startPlayerEngineTask(signature, 0, "Using PlayerEngine to attack the nearby hostile.");
         return true;
     }
 
@@ -12184,9 +11901,6 @@ public class LocalBehaviorController {
             Map<String, Integer> depthByPosition,
             Map<String, ExpeditionMemory.BranchRoute> predecessorByEnd
     ) {
-    }
-
-    private record PlayerEngineAcquisitionRequest(String catalogueName, int amount) {
     }
 
     private record LayerTarget(String dimension, int minY, int maxY) {
