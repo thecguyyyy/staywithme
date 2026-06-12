@@ -299,6 +299,7 @@ public class LocalBehaviorController {
     private boolean fuelCharcoalFallbackActive;
     private final PlayerEngineTaskState playerEngineTaskState = new PlayerEngineTaskState();
     private final PlayerEngineAcquisitionRunner playerEngineAcquisitionRunner;
+    private final PlayerEngineCountedTaskRunner playerEngineCountedTaskRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -373,6 +374,13 @@ public class LocalBehaviorController {
                 }
         );
         this.playerEngineAcquisitionRunner = new PlayerEngineAcquisitionRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
+        );
+        this.playerEngineCountedTaskRunner = new PlayerEngineCountedTaskRunner(
                 body,
                 friend,
                 this.playerEngineTaskState,
@@ -1333,34 +1341,17 @@ public class LocalBehaviorController {
 
     private void collectBuildingMaterials(FriendTask task) {
         int requiredBlocks = Math.max(1, task == null || task.amount() <= 0 ? 32 : task.amount());
-        if (this.isBuildingMaterialsSatisfied(task)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Building-material collection needs PlayerEngine right now; Forge fallback does not implement generic throwaway-block gathering.");
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasBuildingMaterialsCollectionFinished(requiredBlocks)) {
-            this.resetPlayerEngineAcquisitionState();
-            if (this.isBuildingMaterialsSatisfied(task)) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine building-material collection finished, but I still do not have enough placeable route blocks.");
-            }
-            return;
-        }
-        if (!this.body.collectBuildingMaterials(requiredBlocks)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine building-material collection did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("building_materials", requiredBlocks, "Using PlayerEngine to collect route building materials x" + requiredBlocks + ".");
+        this.playerEngineCountedTaskRunner.run(
+                "building_materials",
+                requiredBlocks,
+                () -> this.isBuildingMaterialsSatisfied(task),
+                () -> this.body.hasBuildingMaterialsCollectionFinished(requiredBlocks),
+                () -> this.body.collectBuildingMaterials(requiredBlocks),
+                "Building-material collection needs PlayerEngine right now; Forge fallback does not implement generic throwaway-block gathering.",
+                "PlayerEngine building-material collection finished, but I still do not have enough placeable route blocks.",
+                "PlayerEngine building-material collection did not start: ",
+                "Using PlayerEngine to collect route building materials x" + requiredBlocks + "."
+        );
     }
 
     private boolean isBuildingMaterialsSatisfied(FriendTask task) {
@@ -1370,64 +1361,32 @@ public class LocalBehaviorController {
 
     private void collectFood(FriendTask task) {
         int requiredFoodUnits = Math.max(1, task == null || task.amount() <= 0 ? 10 : task.amount());
-        if (this.carriedFoodUnits() >= requiredFoodUnits) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Food collection needs PlayerEngine right now. Ask for a specific food item if you want the local get/craft fallback.");
-            return;
-        }
-        if (this.playerEngineTaskState.active() && this.body.hasFoodCollectionFinished(requiredFoodUnits)) {
-            this.resetPlayerEngineAcquisitionState();
-            if (this.carriedFoodUnits() >= requiredFoodUnits) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine food collection finished, but I still do not have enough food.");
-            }
-            return;
-        }
-        if (!this.body.collectFood(requiredFoodUnits)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine food collection did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("food", requiredFoodUnits, "Using PlayerEngine to collect food units x" + requiredFoodUnits + ".");
+        this.playerEngineCountedTaskRunner.run(
+                "food",
+                requiredFoodUnits,
+                () -> this.carriedFoodUnits() >= requiredFoodUnits,
+                () -> this.body.hasFoodCollectionFinished(requiredFoodUnits),
+                () -> this.body.collectFood(requiredFoodUnits),
+                "Food collection needs PlayerEngine right now. Ask for a specific food item if you want the local get/craft fallback.",
+                "PlayerEngine food collection finished, but I still do not have enough food.",
+                "PlayerEngine food collection did not start: ",
+                "Using PlayerEngine to collect food units x" + requiredFoodUnits + "."
+        );
     }
 
     private void collectMeat(FriendTask task) {
         int requiredFoodUnits = Math.max(1, task == null || task.amount() <= 0 ? 10 : task.amount());
-        if (this.carriedMeatFoodUnits() >= requiredFoodUnits) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Meat collection needs PlayerEngine right now; Forge fallback does not implement hunting.");
-            return;
-        }
-        if (this.playerEngineTaskState.active() && this.body.hasMeatCollectionFinished(requiredFoodUnits)) {
-            this.resetPlayerEngineAcquisitionState();
-            if (this.carriedMeatFoodUnits() >= requiredFoodUnits) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine meat collection finished, but I still do not have enough meat.");
-            }
-            return;
-        }
-        if (!this.body.collectMeat(requiredFoodUnits)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine meat collection did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("meat", requiredFoodUnits, "Using PlayerEngine to collect meat food units x" + requiredFoodUnits + ".");
+        this.playerEngineCountedTaskRunner.run(
+                "meat",
+                requiredFoodUnits,
+                () -> this.carriedMeatFoodUnits() >= requiredFoodUnits,
+                () -> this.body.hasMeatCollectionFinished(requiredFoodUnits),
+                () -> this.body.collectMeat(requiredFoodUnits),
+                "Meat collection needs PlayerEngine right now; Forge fallback does not implement hunting.",
+                "PlayerEngine meat collection finished, but I still do not have enough meat.",
+                "PlayerEngine meat collection did not start: ",
+                "Using PlayerEngine to collect meat food units x" + requiredFoodUnits + "."
+        );
     }
 
     private void collectFuel(FriendTask task) {
@@ -1508,38 +1467,17 @@ public class LocalBehaviorController {
 
         String target = normalizedTarget.get();
         int amount = Math.max(1, task == null || task.amount() <= 0 ? 1 : task.amount());
-        if (this.countSmeltOutput(target) >= amount) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasSmeltItemFinished(target, amount)) {
-            this.resetPlayerEngineAcquisitionState();
-            if (this.countSmeltOutput(target) >= amount) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine smelting finished, but I still do not have enough " + target + ".");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Smelting " + target + " needs PlayerEngine right now; Forge fallback only completes if the output is already carried.");
-            return;
-        }
-        if (!this.body.smeltItem(target, amount)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine smelting did not start for "
-                    + target
-                    + " x"
-                    + amount
-                    + ": "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("smelt:" + target, amount, "Using PlayerEngine furnace smelting for " + target + " x" + amount + ".");
+        this.playerEngineCountedTaskRunner.run(
+                "smelt:" + target,
+                amount,
+                () -> this.countSmeltOutput(target) >= amount,
+                () -> this.body.hasSmeltItemFinished(target, amount),
+                () -> this.body.smeltItem(target, amount),
+                "Smelting " + target + " needs PlayerEngine right now; Forge fallback only completes if the output is already carried.",
+                "PlayerEngine smelting finished, but I still do not have enough " + target + ".",
+                "PlayerEngine smelting did not start for " + target + " x" + amount + ": ",
+                "Using PlayerEngine furnace smelting for " + target + " x" + amount + "."
+        );
     }
 
     private void fish(FriendTask task) {
