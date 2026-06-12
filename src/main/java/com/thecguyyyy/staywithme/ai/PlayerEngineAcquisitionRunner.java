@@ -51,7 +51,7 @@ final class PlayerEngineAcquisitionRunner {
         }
         if (!this.body.acquireItem(catalogueName, count)) {
             this.announcer.accept("PlayerEngine get did not start ("
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 120)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 120)
                     + "). Trying Forge fallback.");
             this.resetState.run();
             return false;
@@ -67,13 +67,4 @@ final class PlayerEngineAcquisitionRunner {
         return true;
     }
 
-    private static String shortStatus(String status, int maxLength) {
-        if (status == null || status.isBlank()) {
-            return "none";
-        }
-        if (status.length() <= maxLength) {
-            return status;
-        }
-        return status.substring(0, Math.max(0, maxLength - 3)) + "...";
-    }
 }

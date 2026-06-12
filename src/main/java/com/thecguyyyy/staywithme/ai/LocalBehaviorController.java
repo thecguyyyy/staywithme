@@ -1355,7 +1355,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.collectBuildingMaterials(requiredBlocks)) {
             this.friend.getFriendBrain().failTask("PlayerEngine building-material collection did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1391,7 +1391,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.collectFood(requiredFoodUnits)) {
             this.friend.getFriendBrain().failTask("PlayerEngine food collection did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1422,7 +1422,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.collectMeat(requiredFoodUnits)) {
             this.friend.getFriendBrain().failTask("PlayerEngine meat collection did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1467,7 +1467,7 @@ public class LocalBehaviorController {
                     task,
                     requiredFuelItems,
                     "PlayerEngine fuel collection did not start: "
-                            + shortStatus(this.body.highLevelAcquisitionStatus(), 120)
+                            + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 120)
             );
             return;
         }
@@ -1534,7 +1534,7 @@ public class LocalBehaviorController {
                     + " x"
                     + amount
                     + ": "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1549,7 +1549,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.fish()) {
             this.friend.getFriendBrain().failTask("PlayerEngine fishing did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1565,7 +1565,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.farm(range)) {
             this.friend.getFriendBrain().failTask("PlayerEngine farming did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1667,7 +1667,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.sleepThroughNight()) {
             this.friend.getFriendBrain().failTask("PlayerEngine sleep did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -1710,7 +1710,7 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.getOutOfWater()) {
-            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
             if (this.tryForgeGetOutOfWater(serverLevel)) {
                 this.sayThrottled("PlayerEngine water escape did not start (" + status + "), so I am using a local dry-ground fallback.");
@@ -1762,7 +1762,7 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.escapeLava()) {
-            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
             if (this.tryForgeEscapeLava(serverLevel)) {
                 this.sayThrottled("PlayerEngine lava escape did not start (" + status + "), so I am using a local safe-ground fallback.");
@@ -2003,7 +2003,7 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.equipArmor(target)) {
-            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
             if (this.armorEquipFallback.equip(target)) {
                 this.sayThrottled("PlayerEngine armor equip did not start (" + status + "), so I equipped carried armor locally.");
@@ -2050,7 +2050,7 @@ public class LocalBehaviorController {
                 this.friend.getFriendBrain().completeTask();
             } else {
                 this.friend.getFriendBrain().failTask("PlayerEngine give stopped before delivery was confirmed: "
-                        + shortStatus(status, 160)
+                        + PlayerEngineStatusText.shortStatus(status, 160)
                         + ".");
             }
             return;
@@ -2065,7 +2065,7 @@ public class LocalBehaviorController {
                     + " x"
                     + amount
                     + ": "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -2104,7 +2104,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("PlayerEngine pickup did not start for "
                     + target
                     + ": "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -2128,7 +2128,7 @@ public class LocalBehaviorController {
                 this.friend.getFriendBrain().completeTask();
             } else {
                 this.friend.getFriendBrain().failTask("PlayerEngine deposit stopped before storage was confirmed: "
-                        + shortStatus(status, 160)
+                        + PlayerEngineStatusText.shortStatus(status, 160)
                         + ".");
             }
             return;
@@ -2139,7 +2139,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.depositInventory()) {
             this.friend.getFriendBrain().failTask("PlayerEngine deposit did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -3217,7 +3217,7 @@ public class LocalBehaviorController {
                         "PlayerEngine goto finished away from "
                                 + normalizedLabel
                                 + "; falling back to route construction. status="
-                                + shortStatus(status, 120)
+                                + PlayerEngineStatusText.shortStatus(status, 120)
                                 + "."
                 );
                 return Optional.empty();
@@ -3230,7 +3230,7 @@ public class LocalBehaviorController {
                         "PlayerEngine goto to "
                                 + normalizedLabel
                                 + " stopped making progress; falling back to route construction. status="
-                                + shortStatus(status, 120)
+                                + PlayerEngineStatusText.shortStatus(status, 120)
                                 + "."
                 );
                 return Optional.empty();
@@ -3244,7 +3244,7 @@ public class LocalBehaviorController {
                         "PlayerEngine could not keep a goto route to "
                                 + normalizedLabel
                                 + "; falling back to route construction. status="
-                                + shortStatus(status, 120)
+                                + PlayerEngineStatusText.shortStatus(status, 120)
                                 + "."
                 );
                 return Optional.empty();
@@ -3617,7 +3617,7 @@ public class LocalBehaviorController {
                     + " amount="
                     + amount
                     + ". PlayerEngine high-level status="
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 180)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 180)
                     + ".";
         }
         return "No workflow is available for "
@@ -3627,16 +3627,6 @@ public class LocalBehaviorController {
                 + " amount="
                 + amount
                 + ".";
-    }
-
-    private static String shortStatus(String status, int maxLength) {
-        if (status == null || status.isBlank()) {
-            return "none";
-        }
-        if (status.length() <= maxLength) {
-            return status;
-        }
-        return status.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 
     private boolean executeAcquireItemStep(ServerLevel serverLevel, WorkStep step) {
@@ -3866,7 +3856,7 @@ public class LocalBehaviorController {
         this.descendPlayerEngineAttempted = true;
         if (!this.body.goToYLevel(targetY)) {
             this.sayThrottled("PlayerEngine Y-layer movement did not start ("
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 120)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 120)
                     + "). Digging a local staircase instead.");
             this.resetPlayerEngineAcquisitionState();
             return false;
@@ -10350,7 +10340,7 @@ public class LocalBehaviorController {
         }
         if (!this.body.protectPlayer()) {
             this.friend.getFriendBrain().failTask("PlayerEngine protect task did not start: "
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 160)
+                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
                     + ".");
             this.resetPlayerEngineAcquisitionState();
             return;
@@ -10392,7 +10382,7 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.retreatFromHostiles(distance)) {
-            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
             if (this.threatSafetyFallback.tryRetreatFromThreat(hostile.get(), distance, TASK_SPEED)) {
                 this.friend.setFriendState(FriendState.EXECUTING_TASK);
@@ -10465,7 +10455,7 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.dodgeProjectiles(horizontalDistance, verticalDistance)) {
-            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
             Optional<BlockPos> dodgeTarget = this.threatSafetyFallback.findProjectileDodgeTarget(horizontalDistance, verticalDistance);
             if (dodgeTarget.isPresent()) {
@@ -10520,7 +10510,7 @@ public class LocalBehaviorController {
             return;
         }
         if (!this.body.projectileProtectionWall()) {
-            String status = shortStatus(this.body.highLevelAcquisitionStatus(), 160);
+            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
             this.resetPlayerEngineAcquisitionState();
             if (this.threatSafetyFallback.tryProjectileWall(task, threat.get(), TASK_SPEED)) {
                 this.friend.setFriendState(FriendState.EXECUTING_TASK);
@@ -10587,7 +10577,7 @@ public class LocalBehaviorController {
                 this.friend.getFriendBrain().completeTask();
             } else {
                 this.friend.getFriendBrain().failTask("PlayerEngine attack stopped before the hostile was defeated: "
-                        + shortStatus(status, 160)
+                        + PlayerEngineStatusText.shortStatus(status, 160)
                         + ".");
             }
             return true;
