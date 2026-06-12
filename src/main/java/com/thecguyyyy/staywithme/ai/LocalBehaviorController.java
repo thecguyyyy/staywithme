@@ -298,6 +298,7 @@ public class LocalBehaviorController {
     private LongTaskWorkflow workflow;
     private boolean fuelCharcoalFallbackActive;
     private final PlayerEngineTaskState playerEngineTaskState = new PlayerEngineTaskState();
+    private final PlayerEngineAcquisitionRunner playerEngineAcquisitionRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -370,6 +371,13 @@ public class LocalBehaviorController {
                         return LocalBehaviorController.this.findStandPositionNearBlock(level, target);
                     }
                 }
+        );
+        this.playerEngineAcquisitionRunner = new PlayerEngineAcquisitionRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
         );
     }
 
@@ -1307,7 +1315,6 @@ public class LocalBehaviorController {
         int amount = Math.max(1, task == null ? 1 : task.amount());
 
         if (this.tryRunPlayerEngineAcquisition(
-                serverLevel,
                 "log",
                 amount,
                 FriendTaskType.COLLECT_WOOD.name(),
@@ -2181,7 +2188,6 @@ public class LocalBehaviorController {
             return false;
         }
         return this.tryRunPlayerEngineAcquisition(
-                level,
                 request.get().catalogueName(),
                 request.get().amount(),
                 task.type().name(),
@@ -2191,37 +2197,19 @@ public class LocalBehaviorController {
     }
 
     private boolean tryRunPlayerEngineAcquisition(
-            ServerLevel level,
             String catalogueName,
             int amount,
             String label,
             BooleanSupplier satisfied,
             Runnable onSatisfied
     ) {
-        int count = Math.max(1, amount);
-        if (satisfied.getAsBoolean()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            onSatisfied.run();
-            return true;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            return false;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasAcquisitionFinished(catalogueName, count)) {
-            this.resetPlayerEngineAcquisitionState();
-            return false;
-        }
-        if (!this.body.acquireItem(catalogueName, count)) {
-            this.sayThrottled("PlayerEngine get did not start ("
-                    + shortStatus(this.body.highLevelAcquisitionStatus(), 120)
-                    + "). Trying Forge fallback.");
-            this.resetPlayerEngineAcquisitionState();
-            return false;
-        }
-        this.startPlayerEngineTask(catalogueName, count, "Using PlayerEngine to get " + catalogueName + " x" + count + " for " + label + ".");
-        return true;
+        return this.playerEngineAcquisitionRunner.tryRun(
+                catalogueName,
+                amount,
+                label,
+                satisfied,
+                onSatisfied
+        );
     }
 
     private void completePlayerEngineAcquisitionTask(ServerLevel level, FriendTask task) {
