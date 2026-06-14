@@ -302,6 +302,7 @@ public class LocalBehaviorController {
     private final PlayerEngineCountedTaskRunner playerEngineCountedTaskRunner;
     private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
     private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
+    private final PlayerEngineMovementRunner playerEngineMovementRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -403,6 +404,7 @@ public class LocalBehaviorController {
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled
         );
+        this.playerEngineMovementRunner = new PlayerEngineMovementRunner(body, friend);
     }
 
     public void onTaskStarted(FriendTask task) {
@@ -1087,9 +1089,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("I cannot follow across dimensions yet.");
             return;
         }
-        if (this.body.canUseHighLevelAcquisition()
-                && this.body.followPlayer(player.getGameProfile().getName(), 2.0D)) {
-            this.friend.setFriendState(FriendState.FOLLOWING);
+        if (this.playerEngineMovementRunner.followPlayer(player.getGameProfile().getName(), 2.0D)) {
             return;
         }
         if (distance > 4.0D) {
@@ -1120,9 +1120,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.body.canUseHighLevelAcquisition()
-                && this.body.returnToEntity(player, 3.0D)) {
-            this.friend.setFriendState(FriendState.RETURNING);
+        if (this.playerEngineMovementRunner.returnToEntity(player, 3.0D)) {
             return;
         }
         this.body.moveTo(player, FOLLOW_SPEED);
@@ -1143,9 +1141,7 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().completeTask();
             return;
         }
-        if (this.body.canUseHighLevelAcquisition()
-                && this.body.goToBlock(pos, 1.5D)) {
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+        if (this.playerEngineMovementRunner.goToBlock(pos, 1.5D)) {
             return;
         }
         this.body.moveTo(pos, TASK_SPEED);
