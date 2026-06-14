@@ -300,6 +300,7 @@ public class LocalBehaviorController {
     private final PlayerEngineTaskState playerEngineTaskState = new PlayerEngineTaskState();
     private final PlayerEngineAcquisitionRunner playerEngineAcquisitionRunner;
     private final PlayerEngineCountedTaskRunner playerEngineCountedTaskRunner;
+    private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -381,6 +382,13 @@ public class LocalBehaviorController {
                 this::sayThrottled
         );
         this.playerEngineCountedTaskRunner = new PlayerEngineCountedTaskRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
+        );
+        this.playerEngineStartOnlyTaskRunner = new PlayerEngineStartOnlyTaskRunner(
                 body,
                 friend,
                 this.playerEngineTaskState,
@@ -1481,34 +1489,26 @@ public class LocalBehaviorController {
     }
 
     private void fish(FriendTask task) {
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Fishing needs PlayerEngine right now; Forge fallback does not implement fishing.");
-            return;
-        }
-        if (!this.body.fish()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine fishing did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("fish", 1, "Using PlayerEngine to fish. Stop me when you have enough.");
+        this.playerEngineStartOnlyTaskRunner.run(
+                "fish",
+                1,
+                this.body::fish,
+                "Fishing needs PlayerEngine right now; Forge fallback does not implement fishing.",
+                "PlayerEngine fishing did not start: ",
+                "Using PlayerEngine to fish. Stop me when you have enough."
+        );
     }
 
     private void farm(FriendTask task) {
         int range = Math.max(1, task == null || task.amount() <= 0 ? 10 : task.amount());
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Farming needs PlayerEngine right now; Forge fallback does not implement crop farming.");
-            return;
-        }
-        if (!this.body.farm(range)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine farming did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("farm", range, "Using PlayerEngine to farm nearby crops within range " + range + ". Stop me when you are done.");
+        this.playerEngineStartOnlyTaskRunner.run(
+                "farm",
+                range,
+                () -> this.body.farm(range),
+                "Farming needs PlayerEngine right now; Forge fallback does not implement crop farming.",
+                "PlayerEngine farming did not start: ",
+                "Using PlayerEngine to farm nearby crops within range " + range + ". Stop me when you are done."
+        );
     }
 
     private void explore(FriendTask task) {
@@ -10272,18 +10272,14 @@ public class LocalBehaviorController {
     }
 
     private void protectPlayer() {
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Protecting with continuous hostile cleanup needs PlayerEngine right now; use /staywithme attack for a single local fallback attack.");
-            return;
-        }
-        if (!this.body.protectPlayer()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine protect task did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("protect_player", 0, "Using PlayerEngine to protect the nearby area until stopped.");
+        this.playerEngineStartOnlyTaskRunner.run(
+                "protect_player",
+                0,
+                this.body::protectPlayer,
+                "Protecting with continuous hostile cleanup needs PlayerEngine right now; use /staywithme attack for a single local fallback attack.",
+                "PlayerEngine protect task did not start: ",
+                "Using PlayerEngine to protect the nearby area until stopped."
+        );
     }
 
     private void retreatFromHostiles(FriendTask task) {
