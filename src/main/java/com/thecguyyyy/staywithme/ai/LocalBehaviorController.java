@@ -301,6 +301,7 @@ public class LocalBehaviorController {
     private final PlayerEngineAcquisitionRunner playerEngineAcquisitionRunner;
     private final PlayerEngineCountedTaskRunner playerEngineCountedTaskRunner;
     private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
+    private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -389,6 +390,13 @@ public class LocalBehaviorController {
                 this::sayThrottled
         );
         this.playerEngineStartOnlyTaskRunner = new PlayerEngineStartOnlyTaskRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
+        );
+        this.playerEngineConfirmedTaskRunner = new PlayerEngineConfirmedTaskRunner(
                 body,
                 friend,
                 this.playerEngineTaskState,
@@ -1979,36 +1987,19 @@ public class LocalBehaviorController {
         }
 
         int amount = Math.max(1, task.amount());
-        if (this.playerEngineTaskState.active()
-                && this.body.hasGiveItemFinished(playerName, target, amount)) {
-            String status = this.body.highLevelAcquisitionStatus();
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            if (status != null && status.contains("callback_finished(")) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine give stopped before delivery was confirmed: "
-                        + PlayerEngineStatusText.shortStatus(status, 160)
-                        + ".");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Giving items needs PlayerEngine right now; Forge fallback does not implement inventory handoff.");
-            return;
-        }
-        if (!this.body.giveItemToPlayer(playerName, target, amount)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine give did not start for "
-                    + target
-                    + " x"
-                    + amount
-                    + ": "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("give:" + target, amount, "Using PlayerEngine to give " + target + " x" + amount + " to " + playerName + ".");
+        String stateName = "give:" + target;
+        String targetPlayer = playerName;
+        this.playerEngineConfirmedTaskRunner.run(
+                stateName,
+                amount,
+                () -> this.body.hasGiveItemFinished(targetPlayer, target, amount),
+                () -> this.body.giveItemToPlayer(targetPlayer, target, amount),
+                PlayerEngineConfirmedTaskRunner::callbackFinished,
+                "Giving items needs PlayerEngine right now; Forge fallback does not implement inventory handoff.",
+                "PlayerEngine give stopped before delivery was confirmed: ",
+                "PlayerEngine give did not start for " + target + " x" + amount + ": ",
+                "Using PlayerEngine to give " + target + " x" + amount + " to " + targetPlayer + "."
+        );
     }
 
     private void pickupDroppedItem(FriendTask task) {
@@ -2018,36 +2009,17 @@ public class LocalBehaviorController {
             this.friend.getFriendBrain().failTask("I need an item target before I can pick up drops.");
             return;
         }
-        if (this.isPickupDroppedItemSatisfied(task)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasPickupDroppedItemFinished(target, amount)) {
-            this.resetPlayerEngineAcquisitionState();
-            if (this.isPickupDroppedItemSatisfied(task)) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine pickup finished, but I still do not have enough " + target + ".");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Picking up targeted drops needs PlayerEngine right now; Forge fallback only auto-picks items within three blocks.");
-            return;
-        }
-        if (!this.body.pickupDroppedItem(target, amount)) {
-            this.friend.getFriendBrain().failTask("PlayerEngine pickup did not start for "
-                    + target
-                    + ": "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("pickup:" + target, amount, "Using PlayerEngine to pick up dropped " + target + " x" + amount + ".");
+        this.playerEngineCountedTaskRunner.run(
+                "pickup:" + target,
+                amount,
+                () -> this.isPickupDroppedItemSatisfied(task),
+                () -> this.body.hasPickupDroppedItemFinished(target, amount),
+                () -> this.body.pickupDroppedItem(target, amount),
+                "Picking up targeted drops needs PlayerEngine right now; Forge fallback only auto-picks items within three blocks.",
+                "PlayerEngine pickup finished, but I still do not have enough " + target + ".",
+                "PlayerEngine pickup did not start for " + target + ": ",
+                "Using PlayerEngine to pick up dropped " + target + " x" + amount + "."
+        );
     }
 
     private boolean isPickupDroppedItemSatisfied(FriendTask task) {
@@ -2058,31 +2030,17 @@ public class LocalBehaviorController {
     }
 
     private void depositInventory(FriendTask task) {
-        if (this.playerEngineTaskState.active() && this.body.hasDepositInventoryFinished()) {
-            String status = this.body.highLevelAcquisitionStatus();
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            if (status != null && (status.contains("callback_finished(") || status.contains("already_satisfied("))) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine deposit stopped before storage was confirmed: "
-                        + PlayerEngineStatusText.shortStatus(status, 160)
-                        + ".");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Depositing inventory needs PlayerEngine right now; Forge fallback does not implement generic container storage.");
-            return;
-        }
-        if (!this.body.depositInventory()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine deposit did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("deposit_inventory", 0, "Using PlayerEngine to deposit non-tool inventory into a container.");
+        this.playerEngineConfirmedTaskRunner.run(
+                "deposit_inventory",
+                0,
+                this.body::hasDepositInventoryFinished,
+                this.body::depositInventory,
+                PlayerEngineConfirmedTaskRunner::callbackFinishedOrAlreadySatisfied,
+                "Depositing inventory needs PlayerEngine right now; Forge fallback does not implement generic container storage.",
+                "PlayerEngine deposit stopped before storage was confirmed: ",
+                "PlayerEngine deposit did not start: ",
+                "Using PlayerEngine to deposit non-tool inventory into a container."
+        );
     }
 
     private void executeWorkflowTask(FriendTask task) {
