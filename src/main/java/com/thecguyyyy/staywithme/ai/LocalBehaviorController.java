@@ -304,6 +304,7 @@ public class LocalBehaviorController {
     private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
     private final PlayerEngineFallbackTaskRunner playerEngineFallbackTaskRunner;
+    private final PlayerEngineArmorEquipRunner playerEngineArmorEquipRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -412,6 +413,14 @@ public class LocalBehaviorController {
                 this.playerEngineTaskState,
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled
+        );
+        this.playerEngineArmorEquipRunner = new PlayerEngineArmorEquipRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this.armorEquipFallback
         );
     }
 
@@ -1870,48 +1879,7 @@ public class LocalBehaviorController {
 
     private void equipArmor(FriendTask task) {
         String target = task == null || task.target() == null || task.target().isBlank() ? "iron" : task.target();
-        if (this.armorEquipFallback.isEquipped(target)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active() && this.body.hasArmorEquipmentFinished(target)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            if (this.armorEquipFallback.equip(target)) {
-                this.sayThrottled("I equipped carried armor after PlayerEngine finished.");
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine armor equip finished, but the requested armor is not equipped.");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            if (this.armorEquipFallback.equip(target)) {
-                this.sayThrottled("Equipped carried armor: " + target + ".");
-                this.friend.getFriendBrain().completeTask();
-                return;
-            }
-            this.friend.getFriendBrain().failTask("Equipping armor needs PlayerEngine to obtain missing armor; Forge fallback can only equip armor already in my inventory.");
-            return;
-        }
-        if (!this.body.equipArmor(target)) {
-            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
-            this.resetPlayerEngineAcquisitionState();
-            if (this.armorEquipFallback.equip(target)) {
-                this.sayThrottled("PlayerEngine armor equip did not start (" + status + "), so I equipped carried armor locally.");
-                this.friend.getFriendBrain().completeTask();
-                return;
-            }
-            this.friend.getFriendBrain().failTask("PlayerEngine armor equip did not start for "
-                    + target
-                    + ": "
-                    + status
-                    + ".");
-            return;
-        }
-        this.startPlayerEngineTask("equip_armor", 1, "Using PlayerEngine to equip armor: " + target + ".");
+        this.playerEngineArmorEquipRunner.run(target);
     }
 
     private void giveItemToPlayer(FriendTask task) {
