@@ -303,6 +303,7 @@ public class LocalBehaviorController {
     private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
     private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
+    private final PlayerEngineFallbackTaskRunner playerEngineFallbackTaskRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -405,6 +406,13 @@ public class LocalBehaviorController {
                 this::sayThrottled
         );
         this.playerEngineMovementRunner = new PlayerEngineMovementRunner(body, friend);
+        this.playerEngineFallbackTaskRunner = new PlayerEngineFallbackTaskRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
+        );
     }
 
     public void onTaskStarted(FriendTask task) {
@@ -1613,42 +1621,20 @@ public class LocalBehaviorController {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        if (!this.friend.isInWater() && this.friend.onGround()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            if (this.tryForgeGetOutOfWater(serverLevel)) {
-                return;
-            }
-            this.friend.getFriendBrain().failTask("I cannot find a dry reachable stand position nearby.");
-            return;
-        }
-        if (this.playerEngineTaskState.active() && this.body.hasGetOutOfWaterFinished()) {
-            this.resetPlayerEngineAcquisitionState();
-            if (!this.friend.isInWater() && this.friend.onGround()) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                if (this.tryForgeGetOutOfWater(serverLevel)) {
-                    return;
-                }
-                this.friend.getFriendBrain().failTask("PlayerEngine water escape finished, but I am still not safely on dry ground.");
-            }
-            return;
-        }
-        if (!this.body.getOutOfWater()) {
-            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
-            this.resetPlayerEngineAcquisitionState();
-            if (this.tryForgeGetOutOfWater(serverLevel)) {
-                this.sayThrottled("PlayerEngine water escape did not start (" + status + "), so I am using a local dry-ground fallback.");
-                return;
-            }
-            this.friend.getFriendBrain().failTask("PlayerEngine water escape did not start: " + status + ".");
-            return;
-        }
-        this.startPlayerEngineTask("get_out_of_water", 0, "Using PlayerEngine to get out of water.");
+        this.playerEngineFallbackTaskRunner.run(
+                "get_out_of_water",
+                0,
+                () -> !this.friend.isInWater() && this.friend.onGround(),
+                this.body::hasGetOutOfWaterFinished,
+                this.body::getOutOfWater,
+                () -> this.tryForgeGetOutOfWater(serverLevel),
+                "I cannot find a dry reachable stand position nearby.",
+                "PlayerEngine water escape finished, but I am still not safely on dry ground.",
+                null,
+                status -> "PlayerEngine water escape did not start: " + status + ".",
+                status -> "PlayerEngine water escape did not start (" + status + "), so I am using a local dry-ground fallback.",
+                "Using PlayerEngine to get out of water."
+        );
     }
 
     private boolean tryForgeGetOutOfWater(ServerLevel level) {
@@ -1666,41 +1652,20 @@ public class LocalBehaviorController {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        if (!this.friend.isInLava() && !this.friend.isOnFire()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            if (this.tryForgeEscapeLava(serverLevel)) {
-                return;
-            }
-            this.friend.getFriendBrain().failTask("I cannot find a reachable lava-safe stand position nearby.");
-            return;
-        }
-        if (this.playerEngineTaskState.active() && this.body.hasEscapeLavaFinished()) {
-            this.resetPlayerEngineAcquisitionState();
-            if (!this.friend.isInLava() && !this.friend.isOnFire()) {
-                this.friend.getFriendBrain().completeTask();
-            } else if (this.tryForgeEscapeLava(serverLevel)) {
-                this.sayThrottled("PlayerEngine lava escape ended with danger remaining, so I am moving to local safe ground.");
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine lava escape finished, but I am still in danger.");
-            }
-            return;
-        }
-        if (!this.body.escapeLava()) {
-            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
-            this.resetPlayerEngineAcquisitionState();
-            if (this.tryForgeEscapeLava(serverLevel)) {
-                this.sayThrottled("PlayerEngine lava escape did not start (" + status + "), so I am using a local safe-ground fallback.");
-                return;
-            }
-            this.friend.getFriendBrain().failTask("PlayerEngine lava escape did not start: " + status + ".");
-            return;
-        }
-        this.startPlayerEngineTask("escape_lava", 0, "Using PlayerEngine to escape lava.");
+        this.playerEngineFallbackTaskRunner.run(
+                "escape_lava",
+                0,
+                () -> !this.friend.isInLava() && !this.friend.isOnFire(),
+                this.body::hasEscapeLavaFinished,
+                this.body::escapeLava,
+                () -> this.tryForgeEscapeLava(serverLevel),
+                "I cannot find a reachable lava-safe stand position nearby.",
+                "PlayerEngine lava escape finished, but I am still in danger.",
+                "PlayerEngine lava escape ended with danger remaining, so I am moving to local safe ground.",
+                status -> "PlayerEngine lava escape did not start: " + status + ".",
+                status -> "PlayerEngine lava escape did not start (" + status + "), so I am using a local safe-ground fallback.",
+                "Using PlayerEngine to escape lava."
+        );
     }
 
     private boolean tryForgeEscapeLava(ServerLevel level) {
