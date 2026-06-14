@@ -1591,30 +1591,17 @@ public class LocalBehaviorController {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        if (isDaytime(serverLevel)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active() && this.body.hasSleepThroughNightFinished()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.friend.getFriendBrain().failTask("Sleeping through night needs PlayerEngine right now; Forge fallback does not implement bed placement/sleeping.");
-            return;
-        }
-        if (!this.body.sleepThroughNight()) {
-            this.friend.getFriendBrain().failTask("PlayerEngine sleep did not start: "
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160)
-                    + ".");
-            this.resetPlayerEngineAcquisitionState();
-            return;
-        }
-        this.startPlayerEngineTask("sleep_through_night", 1, "Using PlayerEngine to sleep through the night.");
+        this.playerEngineCountedTaskRunner.run(
+                "sleep_through_night",
+                1,
+                () -> isDaytime(serverLevel),
+                this.body::hasSleepThroughNightFinished,
+                this.body::sleepThroughNight,
+                "Sleeping through night needs PlayerEngine right now; Forge fallback does not implement bed placement/sleeping.",
+                "PlayerEngine sleep finished, but it is still night.",
+                "PlayerEngine sleep did not start: ",
+                "Using PlayerEngine to sleep through the night."
+        );
     }
 
     private static boolean isDaytime(ServerLevel level) {
