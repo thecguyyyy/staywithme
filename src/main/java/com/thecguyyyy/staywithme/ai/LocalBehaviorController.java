@@ -548,6 +548,7 @@ public class LocalBehaviorController {
         this.playerEngineHostileAttackRunner = new PlayerEngineHostileAttackRunner(
                 body,
                 friend,
+                this.playerEngineStartOnlyTaskRunner,
                 this.playerEngineTaskState,
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled,
@@ -9606,14 +9607,7 @@ public class LocalBehaviorController {
     }
 
     private void protectPlayer() {
-        this.playerEngineStartOnlyTaskRunner.run(
-                "protect_player",
-                0,
-                this.body::protectPlayer,
-                "Protecting with continuous hostile cleanup needs PlayerEngine right now; use /staywithme attack for a single local fallback attack.",
-                "PlayerEngine protect task did not start: ",
-                "Using PlayerEngine to protect the nearby area until stopped."
-        );
+        this.playerEngineHostileAttackRunner.protectPlayer();
     }
 
     private void retreatFromHostiles(FriendTask task) {
@@ -9655,7 +9649,7 @@ public class LocalBehaviorController {
             this.friend.setTarget(this.combatTarget);
         }
 
-        if (this.tryRunPlayerEngineHostileAttack(this.combatTarget)) {
+        if (this.playerEngineHostileAttackRunner.tryRun(this.combatTarget)) {
             return;
         }
 
@@ -9670,10 +9664,6 @@ public class LocalBehaviorController {
             this.attackCooldownTicks = 20;
             this.friend.getHungerProvider().addExhaustion(0.1F);
         }
-    }
-
-    private boolean tryRunPlayerEngineHostileAttack(LivingEntity target) {
-        return this.playerEngineHostileAttackRunner.tryRun(target);
     }
 
     private void applyRememberedExpedition(FriendTask task) {

@@ -9,6 +9,7 @@ import java.util.function.Consumer;
 final class PlayerEngineHostileAttackRunner {
     private final EmbodiedController body;
     private final FriendEntity friend;
+    private final PlayerEngineStartOnlyTaskRunner startOnlyRunner;
     private final PlayerEngineTaskState taskState;
     private final Runnable resetTaskState;
     private final Consumer<String> announcer;
@@ -17,6 +18,7 @@ final class PlayerEngineHostileAttackRunner {
     PlayerEngineHostileAttackRunner(
             EmbodiedController body,
             FriendEntity friend,
+            PlayerEngineStartOnlyTaskRunner startOnlyRunner,
             PlayerEngineTaskState taskState,
             Runnable resetTaskState,
             Consumer<String> announcer,
@@ -24,10 +26,22 @@ final class PlayerEngineHostileAttackRunner {
     ) {
         this.body = body;
         this.friend = friend;
+        this.startOnlyRunner = startOnlyRunner;
         this.taskState = taskState;
         this.resetTaskState = resetTaskState;
         this.announcer = announcer;
         this.speaker = speaker;
+    }
+
+    void protectPlayer() {
+        this.startOnlyRunner.run(
+                "protect_player",
+                0,
+                this.body::protectPlayer,
+                "Protecting with continuous hostile cleanup needs PlayerEngine right now; use /staywithme attack for a single local fallback attack.",
+                "PlayerEngine protect task did not start: ",
+                "Using PlayerEngine to protect the nearby area until stopped."
+        );
     }
 
     boolean tryRun(LivingEntity target) {
