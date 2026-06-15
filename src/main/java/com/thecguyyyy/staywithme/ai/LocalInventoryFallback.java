@@ -3,6 +3,7 @@ package com.thecguyyyy.staywithme.ai;
 import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.world.Container;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -10,6 +11,8 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+
+import java.util.function.Predicate;
 
 final class LocalInventoryFallback {
     private static final int EXPEDITION_MIN_PICKAXE_DURABILITY = 8;
@@ -174,6 +177,93 @@ final class LocalInventoryFallback {
         return empty;
     }
 
+    int countContainerItems(Container container, Predicate<ItemStack> matcher) {
+        int count = 0;
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack stack = container.getItem(slot);
+            if (!stack.isEmpty() && matcher.test(stack)) {
+                count += stack.getCount();
+            }
+        }
+        return count;
+    }
+
+    boolean moveOneMatchingFromContainer(Container container, Predicate<ItemStack> matcher) {
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack stack = container.getItem(slot);
+            if (stack.isEmpty() || !matcher.test(stack)) {
+                continue;
+            }
+            ItemStack toMove = stack.copyWithCount(1);
+            ItemStack remainder = this.friend.insertIntoInventory(toMove);
+            if (!remainder.isEmpty()) {
+                return false;
+            }
+            stack.shrink(1);
+            if (stack.isEmpty()) {
+                container.setItem(slot, ItemStack.EMPTY);
+            }
+            container.setChanged();
+            this.friend.getFriendInventory().setChanged();
+            return true;
+        }
+        return false;
+    }
+
+    boolean moveMatchingItemsFromContainer(Container container, Predicate<ItemStack> matcher, int amount) {
+        int moved = 0;
+        while (moved < amount && this.moveOneMatchingFromContainer(container, matcher)) {
+            moved++;
+        }
+        return moved >= amount;
+    }
+
+    int unloadMatchingInventoryItems(Container chest, Predicate<ItemStack> matcher) {
+        int movedTotal = 0;
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (stack.isEmpty() || !matcher.test(stack)) {
+                continue;
+            }
+            int original = stack.getCount();
+            ItemStack remainder = this.insertIntoContainer(chest, stack.copy());
+            int moved = original - remainder.getCount();
+            if (moved <= 0) {
+                continue;
+            }
+            stack.shrink(moved);
+            if (stack.isEmpty()) {
+                this.friend.getFriendInventory().setItem(slot, ItemStack.EMPTY);
+            }
+            movedTotal += moved;
+        }
+        if (movedTotal > 0) {
+            this.friend.getFriendInventory().setChanged();
+            chest.setChanged();
+        }
+        return movedTotal;
+    }
+
+    boolean canContainerAccept(Container container, ItemStack stack) {
+        if (container == null || stack.isEmpty()) {
+            return false;
+        }
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack existing = container.getItem(slot);
+            if (existing.isEmpty()) {
+                return true;
+            }
+            if (!ItemStack.isSameItemSameTags(existing, stack)) {
+                continue;
+            }
+            int max = Math.min(existing.getMaxStackSize(), container.getMaxStackSize());
+            if (existing.getCount() < max) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     boolean hasUsablePickaxeForRequirement(MiningTargetRegistry.ToolRequirement requirement) {
         BlockState representative = switch (requirement) {
             case NONE -> null;
@@ -253,6 +343,40 @@ final class LocalInventoryFallback {
 
     private int remainingDurability(ItemStack stack) {
         return Math.max(0, stack.getMaxDamage() - stack.getDamageValue());
+    }
+
+    ItemStack insertIntoContainer(Container container, ItemStack stack) {
+        ItemStack remainder = stack.copy();
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack existing = container.getItem(slot);
+            if (existing.isEmpty() || !ItemStack.isSameItemSameTags(existing, remainder)) {
+                continue;
+            }
+            int max = Math.min(existing.getMaxStackSize(), container.getMaxStackSize());
+            int moved = Math.min(remainder.getCount(), max - existing.getCount());
+            if (moved <= 0) {
+                continue;
+            }
+            existing.grow(moved);
+            remainder.shrink(moved);
+            if (remainder.isEmpty()) {
+                return ItemStack.EMPTY;
+            }
+        }
+
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            if (!container.getItem(slot).isEmpty()) {
+                continue;
+            }
+            int moved = Math.min(remainder.getCount(), Math.min(remainder.getMaxStackSize(), container.getMaxStackSize()));
+            ItemStack inserted = remainder.copyWithCount(moved);
+            container.setItem(slot, inserted);
+            remainder.shrink(moved);
+            if (remainder.isEmpty()) {
+                return ItemStack.EMPTY;
+            }
+        }
+        return remainder;
     }
 
     private int countFloorRepairItems(FriendTask task, Item item) {

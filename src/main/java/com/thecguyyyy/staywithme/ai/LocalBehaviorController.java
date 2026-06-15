@@ -7101,11 +7101,7 @@ public class LocalBehaviorController {
     }
 
     private boolean moveMatchingItemsFromContainer(Container container, Predicate<ItemStack> matcher, int amount) {
-        int moved = 0;
-        while (moved < amount && this.moveOneMatchingFromContainer(container, matcher)) {
-            moved++;
-        }
-        return moved >= amount;
+        return this.inventoryFallback.moveMatchingItemsFromContainer(container, matcher, amount);
     }
 
     private void unloadSupplyCraftingRemainders(Container chest) {
@@ -7556,62 +7552,15 @@ public class LocalBehaviorController {
     }
 
     private int countContainerItems(Container container, Predicate<ItemStack> matcher) {
-        int count = 0;
-        for (int slot = 0; slot < container.getContainerSize(); slot++) {
-            ItemStack stack = container.getItem(slot);
-            if (!stack.isEmpty() && matcher.test(stack)) {
-                count += stack.getCount();
-            }
-        }
-        return count;
+        return this.inventoryFallback.countContainerItems(container, matcher);
     }
 
     private boolean moveOneMatchingFromContainer(Container container, Predicate<ItemStack> matcher) {
-        for (int slot = 0; slot < container.getContainerSize(); slot++) {
-            ItemStack stack = container.getItem(slot);
-            if (stack.isEmpty() || !matcher.test(stack)) {
-                continue;
-            }
-            ItemStack toMove = stack.copyWithCount(1);
-            ItemStack remainder = this.friend.insertIntoInventory(toMove);
-            if (!remainder.isEmpty()) {
-                return false;
-            }
-            stack.shrink(1);
-            if (stack.isEmpty()) {
-                container.setItem(slot, ItemStack.EMPTY);
-            }
-            container.setChanged();
-            this.friend.getFriendInventory().setChanged();
-            return true;
-        }
-        return false;
+        return this.inventoryFallback.moveOneMatchingFromContainer(container, matcher);
     }
 
     private int unloadMatchingInventoryItems(Container chest, Predicate<ItemStack> matcher) {
-        int movedTotal = 0;
-        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
-            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
-            if (stack.isEmpty() || !matcher.test(stack)) {
-                continue;
-            }
-            int original = stack.getCount();
-            ItemStack remainder = this.insertIntoContainer(chest, stack.copy());
-            int moved = original - remainder.getCount();
-            if (moved <= 0) {
-                continue;
-            }
-            stack.shrink(moved);
-            if (stack.isEmpty()) {
-                this.friend.getFriendInventory().setItem(slot, ItemStack.EMPTY);
-            }
-            movedTotal += moved;
-        }
-        if (movedTotal > 0) {
-            this.friend.getFriendInventory().setChanged();
-            chest.setChanged();
-        }
-        return movedTotal;
+        return this.inventoryFallback.unloadMatchingInventoryItems(chest, matcher);
     }
 
     private boolean shouldKeepForExpedition(ItemStack stack, FriendTask task) {
@@ -7673,57 +7622,11 @@ public class LocalBehaviorController {
     }
 
     private boolean canContainerAccept(Container container, ItemStack stack) {
-        if (container == null || stack.isEmpty()) {
-            return false;
-        }
-        for (int slot = 0; slot < container.getContainerSize(); slot++) {
-            ItemStack existing = container.getItem(slot);
-            if (existing.isEmpty()) {
-                return true;
-            }
-            if (!ItemStack.isSameItemSameTags(existing, stack)) {
-                continue;
-            }
-            int max = Math.min(existing.getMaxStackSize(), container.getMaxStackSize());
-            if (existing.getCount() < max) {
-                return true;
-            }
-        }
-        return false;
+        return this.inventoryFallback.canContainerAccept(container, stack);
     }
 
     private ItemStack insertIntoContainer(Container container, ItemStack stack) {
-        ItemStack remainder = stack.copy();
-        for (int slot = 0; slot < container.getContainerSize(); slot++) {
-            ItemStack existing = container.getItem(slot);
-            if (existing.isEmpty() || !ItemStack.isSameItemSameTags(existing, remainder)) {
-                continue;
-            }
-            int max = Math.min(existing.getMaxStackSize(), container.getMaxStackSize());
-            int moved = Math.min(remainder.getCount(), max - existing.getCount());
-            if (moved <= 0) {
-                continue;
-            }
-            existing.grow(moved);
-            remainder.shrink(moved);
-            if (remainder.isEmpty()) {
-                return ItemStack.EMPTY;
-            }
-        }
-
-        for (int slot = 0; slot < container.getContainerSize(); slot++) {
-            if (!container.getItem(slot).isEmpty()) {
-                continue;
-            }
-            int moved = Math.min(remainder.getCount(), Math.min(remainder.getMaxStackSize(), container.getMaxStackSize()));
-            ItemStack inserted = remainder.copyWithCount(moved);
-            container.setItem(slot, inserted);
-            remainder.shrink(moved);
-            if (remainder.isEmpty()) {
-                return ItemStack.EMPTY;
-            }
-        }
-        return remainder;
+        return this.inventoryFallback.insertIntoContainer(container, stack);
     }
 
     private Optional<MiningExpeditionPlan> parseMiningExpeditionPlan(FriendTask task) {
