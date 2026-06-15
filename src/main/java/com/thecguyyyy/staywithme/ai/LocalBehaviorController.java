@@ -291,6 +291,7 @@ public class LocalBehaviorController {
     private final PlayerEngineTaskState playerEngineTaskState = new PlayerEngineTaskState();
     private final PlayerEngineAcquisitionRunner playerEngineAcquisitionRunner;
     private final PlayerEngineCountedTaskRunner playerEngineCountedTaskRunner;
+    private final PlayerEngineCollectionRunner playerEngineCollectionRunner;
     private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
     private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
@@ -404,6 +405,13 @@ public class LocalBehaviorController {
                 this.playerEngineTaskState,
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled
+        );
+        this.playerEngineCollectionRunner = new PlayerEngineCollectionRunner(
+                body,
+                this.playerEngineCountedTaskRunner,
+                this::countConstructionRepairBlocks,
+                this::carriedFoodUnits,
+                this::carriedMeatFoodUnits
         );
         this.playerEngineStartOnlyTaskRunner = new PlayerEngineStartOnlyTaskRunner(
                 body,
@@ -1362,18 +1370,7 @@ public class LocalBehaviorController {
     }
 
     private void collectBuildingMaterials(FriendTask task) {
-        int requiredBlocks = Math.max(1, task == null || task.amount() <= 0 ? 32 : task.amount());
-        this.playerEngineCountedTaskRunner.run(
-                "building_materials",
-                requiredBlocks,
-                () -> this.isBuildingMaterialsSatisfied(task),
-                () -> this.body.hasBuildingMaterialsCollectionFinished(requiredBlocks),
-                () -> this.body.collectBuildingMaterials(requiredBlocks),
-                "Building-material collection needs PlayerEngine right now; Forge fallback does not implement generic throwaway-block gathering.",
-                "PlayerEngine building-material collection finished, but I still do not have enough placeable route blocks.",
-                "PlayerEngine building-material collection did not start: ",
-                "Using PlayerEngine to collect route building materials x" + requiredBlocks + "."
-        );
+        this.playerEngineCollectionRunner.collectBuildingMaterials(task);
     }
 
     private boolean isBuildingMaterialsSatisfied(FriendTask task) {
@@ -1382,33 +1379,11 @@ public class LocalBehaviorController {
     }
 
     private void collectFood(FriendTask task) {
-        int requiredFoodUnits = Math.max(1, task == null || task.amount() <= 0 ? 10 : task.amount());
-        this.playerEngineCountedTaskRunner.run(
-                "food",
-                requiredFoodUnits,
-                () -> this.carriedFoodUnits() >= requiredFoodUnits,
-                () -> this.body.hasFoodCollectionFinished(requiredFoodUnits),
-                () -> this.body.collectFood(requiredFoodUnits),
-                "Food collection needs PlayerEngine right now. Ask for a specific food item if you want the local get/craft fallback.",
-                "PlayerEngine food collection finished, but I still do not have enough food.",
-                "PlayerEngine food collection did not start: ",
-                "Using PlayerEngine to collect food units x" + requiredFoodUnits + "."
-        );
+        this.playerEngineCollectionRunner.collectFood(task);
     }
 
     private void collectMeat(FriendTask task) {
-        int requiredFoodUnits = Math.max(1, task == null || task.amount() <= 0 ? 10 : task.amount());
-        this.playerEngineCountedTaskRunner.run(
-                "meat",
-                requiredFoodUnits,
-                () -> this.carriedMeatFoodUnits() >= requiredFoodUnits,
-                () -> this.body.hasMeatCollectionFinished(requiredFoodUnits),
-                () -> this.body.collectMeat(requiredFoodUnits),
-                "Meat collection needs PlayerEngine right now; Forge fallback does not implement hunting.",
-                "PlayerEngine meat collection finished, but I still do not have enough meat.",
-                "PlayerEngine meat collection did not start: ",
-                "Using PlayerEngine to collect meat food units x" + requiredFoodUnits + "."
-        );
+        this.playerEngineCollectionRunner.collectMeat(task);
     }
 
     private void collectFuel(FriendTask task) {
