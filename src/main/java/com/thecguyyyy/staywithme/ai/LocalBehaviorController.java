@@ -304,6 +304,7 @@ public class LocalBehaviorController {
     private final PlayerEngineFuelRunner playerEngineFuelRunner;
     private final PlayerEngineConstructionMaterialRestockRunner playerEngineConstructionMaterialRestockRunner;
     private final PlayerEngineThreatSafetyRunner playerEngineThreatSafetyRunner;
+    private final PlayerEngineHostileAttackRunner playerEngineHostileAttackRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -491,6 +492,14 @@ public class LocalBehaviorController {
                 this::sayThrottled,
                 this::formatPos,
                 this.threatSafetyFallback
+        );
+        this.playerEngineHostileAttackRunner = new PlayerEngineHostileAttackRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this::say
         );
     }
 
@@ -1966,18 +1975,6 @@ public class LocalBehaviorController {
         if (wasConstructionRestock) {
             this.resetConstructionMaterialRestockState();
         }
-    }
-
-    private void announcePlayerEngineTask(String message) {
-        this.playerEngineTaskState.announce(this::sayThrottled, message);
-    }
-
-    private void startPlayerEngineTask(String stateName, int amount, String message) {
-        this.startPlayerEngineTask(stateName, amount, FriendState.EXECUTING_TASK, message);
-    }
-
-    private void startPlayerEngineTask(String stateName, int amount, FriendState state, String message) {
-        this.playerEngineTaskState.startTask(stateName, amount, this.friend, state, this::sayThrottled, message);
     }
 
     private boolean handleMiningExpeditionSafety(ServerLevel serverLevel, FriendTask task, PerceptionSnapshot snapshot) {
@@ -9915,35 +9912,7 @@ public class LocalBehaviorController {
     }
 
     private boolean tryRunPlayerEngineHostileAttack(LivingEntity target) {
-        if (target == null) {
-            return false;
-        }
-        String signature = "attack:" + target.getUUID();
-        if (this.playerEngineTaskState.active() && this.body.hasAttackTargetFinished(target)) {
-            String status = this.body.highLevelAcquisitionStatus();
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            if (!target.isAlive() || (status != null && status.contains("callback_finished("))) {
-                this.say("The hostile mob is down.");
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine attack stopped before the hostile was defeated: "
-                        + PlayerEngineStatusText.shortStatus(status, 160)
-                        + ".");
-            }
-            return true;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            return false;
-        }
-        if (!this.body.attackTarget(target)) {
-            if (this.playerEngineTaskState.active(signature)) {
-                this.resetPlayerEngineAcquisitionState();
-            }
-            return false;
-        }
-        this.startPlayerEngineTask(signature, 0, "Using PlayerEngine to attack the nearby hostile.");
-        return true;
+        return this.playerEngineHostileAttackRunner.tryRun(target);
     }
 
     private void applyRememberedExpedition(FriendTask task) {
