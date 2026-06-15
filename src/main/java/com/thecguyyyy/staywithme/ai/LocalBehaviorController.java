@@ -303,6 +303,7 @@ public class LocalBehaviorController {
     private final PlayerEngineRemoteTravelRunner playerEngineRemoteTravelRunner;
     private final PlayerEngineYLevelRunner playerEngineYLevelRunner;
     private final PlayerEngineExploreRunner playerEngineExploreRunner;
+    private final PlayerEngineFuelRunner playerEngineFuelRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -460,6 +461,17 @@ public class LocalBehaviorController {
                 this::resetPlayerEngineAcquisitionState,
                 () -> this.exploreTarget = null,
                 this::sayThrottled
+        );
+        this.playerEngineFuelRunner = new PlayerEngineFuelRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this::countCoalEquivalent,
+                () -> this.fuelCharcoalFallbackActive,
+                active -> this.fuelCharcoalFallbackActive = active,
+                this::executeFuelCharcoalFallback
         );
     }
 
@@ -1444,46 +1456,7 @@ public class LocalBehaviorController {
 
     private void collectFuel(FriendTask task) {
         int requiredFuelItems = this.fuelAmountForTask(task);
-        if (this.countCoalEquivalent() >= requiredFuelItems) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.fuelCharcoalFallbackActive = false;
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.fuelCharcoalFallbackActive) {
-            this.executeFuelCharcoalFallback(task, requiredFuelItems, "continuing charcoal fallback");
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            this.executeFuelCharcoalFallback(task, requiredFuelItems, "PlayerEngine is unavailable");
-            return;
-        }
-        if (this.playerEngineTaskState.active("fuel")
-                && this.body.hasFuelCollectionFinished(requiredFuelItems)) {
-            this.resetPlayerEngineAcquisitionState();
-            if (this.countCoalEquivalent() >= requiredFuelItems) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.executeFuelCharcoalFallback(
-                        task,
-                        requiredFuelItems,
-                        "PlayerEngine fuel collection finished without enough coal or charcoal"
-                );
-            }
-            return;
-        }
-        if (!this.body.collectFuel(requiredFuelItems)) {
-            this.resetPlayerEngineAcquisitionState();
-            this.executeFuelCharcoalFallback(
-                    task,
-                    requiredFuelItems,
-                    "PlayerEngine fuel collection did not start: "
-                            + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 120)
-            );
-            return;
-        }
-        this.startPlayerEngineTask("fuel", requiredFuelItems, "Using PlayerEngine to collect fuel items x" + requiredFuelItems + ".");
+        this.playerEngineFuelRunner.run(task, requiredFuelItems);
     }
 
     private int fuelAmountForTask(FriendTask task) {
