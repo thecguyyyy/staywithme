@@ -122,7 +122,6 @@ public class LocalBehaviorController {
     private static final int REMOTE_CONSTRUCTION_HORIZONTAL_THRESHOLD = 32;
     private static final int REMOTE_CONSTRUCTION_VERTICAL_THRESHOLD = 12;
     private static final int REMOTE_CONSTRUCTION_NO_PROGRESS_SEGMENT_LIMIT = 8;
-    private static final double REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH = 3.0D;
     private static final Direction[] HORIZONTAL_EXPEDITION_DIRECTIONS = new Direction[]{
             Direction.NORTH,
             Direction.EAST,
@@ -290,9 +289,6 @@ public class LocalBehaviorController {
     private BlockPos constructionVerticalFrom;
     private BlockPos constructionVerticalTarget;
     private int constructionVerticalActionTicks;
-    private BlockPos remotePlayerEngineTravelTarget;
-    private String remotePlayerEngineTravelLabel = "none";
-    private boolean remotePlayerEngineTravelAttempted;
     private LivingEntity combatTarget;
     private BlockPos exploreTarget;
     private LongTaskWorkflow workflow;
@@ -307,6 +303,7 @@ public class LocalBehaviorController {
     private final PlayerEngineArmorEquipRunner playerEngineArmorEquipRunner;
     private final PlayerEnginePlaceBlockRunner playerEnginePlaceBlockRunner;
     private final PlayerEngineBlockSafetyRunner playerEngineBlockSafetyRunner;
+    private final PlayerEngineRemoteTravelRunner playerEngineRemoteTravelRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -440,6 +437,15 @@ public class LocalBehaviorController {
                 this::sayThrottled,
                 this::formatPos,
                 this.blockSafetyFallback
+        );
+        this.playerEngineRemoteTravelRunner = new PlayerEngineRemoteTravelRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::resetConstructionPathRecovery,
+                this::sayThrottled,
+                this::formatPos
         );
     }
 
@@ -2911,154 +2917,16 @@ public class LocalBehaviorController {
     }
 
     private Optional<ConstructionTravelResult> tickRemotePlayerEngineTravel(BlockPos target, String label, boolean moveStalled) {
-        if (!this.body.canUseHighLevelAcquisition()) {
-            if (this.playerEngineTaskState.active("remote_goto")) {
-                this.resetPlayerEngineAcquisitionState();
-                this.remotePlayerEngineTravelAttempted = true;
-            }
-            return Optional.empty();
-        }
-        if (this.isConstructionMaterialRestockActive()
-                || (this.playerEngineTaskState.active()
-                && !this.playerEngineTaskState.active("remote_goto"))) {
-            return Optional.empty();
-        }
-
-        String normalizedLabel = this.normalizedRemotePlayerEngineTravelLabel(label);
-        if (!this.isSameRemotePlayerEngineTravel(target, normalizedLabel)) {
-            if (this.playerEngineTaskState.active("remote_goto")) {
-                this.body.stop();
-                this.resetPlayerEngineAcquisitionState();
-            }
-            this.resetRemotePlayerEngineTravel();
-            this.remotePlayerEngineTravelTarget = target.immutable();
-            this.remotePlayerEngineTravelLabel = normalizedLabel;
-        }
-
-        if (this.playerEngineTaskState.active("remote_goto")) {
-            String status = this.body.highLevelAcquisitionStatus();
-            if (this.body.hasGoToBlockFinished(target, REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH)
-                    || this.isRemotePlayerEngineGoToFinished(target, status)) {
-                this.body.stop();
-                this.resetPlayerEngineAcquisitionState();
-                if (this.friend.blockPosition().distSqr(target) <= 9.0D) {
-                    this.resetRemotePlayerEngineTravel();
-                    this.resetConstructionPathRecovery();
-                    return Optional.of(ConstructionTravelResult.COMPLETE);
-                }
-                this.remotePlayerEngineTravelAttempted = true;
-                this.sayThrottled(
-                        "PlayerEngine goto finished away from "
-                                + normalizedLabel
-                                + "; falling back to route construction. status="
-                                + PlayerEngineStatusText.shortStatus(status, 120)
-                                + "."
-                );
-                return Optional.empty();
-            }
-
-            if (moveStalled) {
-                this.resetPlayerEngineAcquisitionState();
-                this.remotePlayerEngineTravelAttempted = true;
-                this.sayThrottled(
-                        "PlayerEngine goto to "
-                                + normalizedLabel
-                                + " stopped making progress; falling back to route construction. status="
-                                + PlayerEngineStatusText.shortStatus(status, 120)
-                                + "."
-                );
-                return Optional.empty();
-            }
-
-            if (this.isRemotePlayerEngineGoToInactive(target, status)
-                    || !this.isRemotePlayerEngineGoToActive(target, status)) {
-                this.resetPlayerEngineAcquisitionState();
-                this.remotePlayerEngineTravelAttempted = true;
-                this.sayThrottled(
-                        "PlayerEngine could not keep a goto route to "
-                                + normalizedLabel
-                                + "; falling back to route construction. status="
-                                + PlayerEngineStatusText.shortStatus(status, 120)
-                                + "."
-                );
-                return Optional.empty();
-            }
-            this.friend.setFriendState(FriendState.RETURNING);
-            return Optional.of(ConstructionTravelResult.WORKING);
-        }
-
-        if (this.remotePlayerEngineTravelAttempted) {
-            return Optional.empty();
-        }
-
-        if (!this.body.goToBlock(target, REMOTE_PLAYER_ENGINE_TRAVEL_CLOSE_ENOUGH)) {
-            this.remotePlayerEngineTravelAttempted = true;
-            this.sayThrottled(
-                    "PlayerEngine could not start goto for "
-                            + normalizedLabel
-                            + "; falling back to route construction."
-            );
-            return Optional.empty();
-        }
-
-        this.startPlayerEngineTask(
-                "remote_goto",
-                0,
-                FriendState.RETURNING,
-                "Using PlayerEngine goto for "
-                        + normalizedLabel
-                        + " before constructing a route."
+        return this.playerEngineRemoteTravelRunner.tick(
+                target,
+                label,
+                moveStalled,
+                this.isConstructionMaterialRestockActive()
         );
-        return Optional.of(ConstructionTravelResult.WORKING);
-    }
-
-    private boolean isSameRemotePlayerEngineTravel(BlockPos target, String label) {
-        return this.remotePlayerEngineTravelTarget != null
-                && this.remotePlayerEngineTravelTarget.equals(target)
-                && Objects.equals(this.remotePlayerEngineTravelLabel, label);
-    }
-
-    private String normalizedRemotePlayerEngineTravelLabel(String label) {
-        if (label == null || label.isBlank()) {
-            return "destination";
-        }
-        return label.trim();
-    }
-
-    private boolean isRemotePlayerEngineGoToActive(BlockPos target, String status) {
-        if (status == null || !status.contains(this.remotePlayerEngineGoToNeedle(target))) {
-            return false;
-        }
-        return status.startsWith("started(") || status.startsWith("running(");
-    }
-
-    private boolean isRemotePlayerEngineGoToFinished(BlockPos target, String status) {
-        if (status == null || !status.contains(this.remotePlayerEngineGoToNeedle(target))) {
-            return false;
-        }
-        return status.startsWith("callback_finished(") || status.startsWith("already_satisfied(");
-    }
-
-    private boolean isRemotePlayerEngineGoToInactive(BlockPos target, String status) {
-        return status != null
-                && status.startsWith("inactive_without_finish(")
-                && status.contains(this.remotePlayerEngineGoToNeedle(target));
-    }
-
-    private String remotePlayerEngineGoToNeedle(BlockPos target) {
-        return "goto:"
-                + target.getX()
-                + ","
-                + target.getY()
-                + ","
-                + target.getZ()
-                + ":";
     }
 
     private void resetRemotePlayerEngineTravel() {
-        this.remotePlayerEngineTravelTarget = null;
-        this.remotePlayerEngineTravelLabel = "none";
-        this.remotePlayerEngineTravelAttempted = false;
+        this.playerEngineRemoteTravelRunner.reset();
     }
 
     private void recordExpeditionTravelBreadcrumb(ServerLevel level, FriendTask task) {
@@ -9507,19 +9375,7 @@ public class LocalBehaviorController {
     }
 
     private String remotePlayerEngineTravelSummary() {
-        if (this.remotePlayerEngineTravelTarget == null
-                && !this.remotePlayerEngineTravelAttempted
-                && !this.playerEngineTaskState.active("remote_goto")) {
-            return "none";
-        }
-        return "target="
-                + this.formatPos(this.remotePlayerEngineTravelTarget)
-                + ",label="
-                + this.remotePlayerEngineTravelLabel
-                + ",attempted="
-                + this.remotePlayerEngineTravelAttempted
-                + ",active="
-                + this.playerEngineTaskState.active("remote_goto");
+        return this.playerEngineRemoteTravelRunner.summary();
     }
 
     private String resourceExploreSummary() {
@@ -11545,12 +11401,6 @@ public class LocalBehaviorController {
         READY,
         WORKING,
         UNAVAILABLE
-    }
-
-    private enum ConstructionTravelResult {
-        WORKING,
-        COMPLETE,
-        FAILED
     }
 
     private enum ConstructionVerticalAction {
