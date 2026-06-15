@@ -76,6 +76,52 @@ final class PlayerEngineBlockSafetyRunner {
         this.applyFallbackResult(this.fallback.tickClearLiquid(level, liquidPos, task, speed));
     }
 
+    PassageClearResult tryClearPassageLiquid(ServerLevel level, BlockPos liquidPos, String label) {
+        if (LocalBlockSafetyFallback.isLiquidCleared(level, liquidPos)) {
+            this.body.stop();
+            this.resetState.run();
+            return PassageClearResult.CLEARED;
+        }
+
+        String stateName = "passage_clear_liquid:" + liquidPos.toShortString();
+        if (this.taskState.active(stateName)) {
+            if (this.body.hasClearLiquidFinished(liquidPos)) {
+                this.body.stop();
+                this.resetState.run();
+                return LocalBlockSafetyFallback.isLiquidCleared(level, liquidPos)
+                        ? PassageClearResult.CLEARED
+                        : PassageClearResult.UNAVAILABLE_OR_FAILED;
+            }
+            this.friend.setFriendState(FriendState.EXECUTING_TASK);
+            return PassageClearResult.WORKING;
+        }
+
+        if (!this.body.canUseHighLevelAcquisition()) {
+            return PassageClearResult.UNAVAILABLE_OR_FAILED;
+        }
+
+        if (!this.body.clearLiquid(liquidPos)) {
+            if (this.taskState.active(stateName)) {
+                this.resetState.run();
+            }
+            return PassageClearResult.UNAVAILABLE_OR_FAILED;
+        }
+
+        this.taskState.startTask(
+                stateName,
+                1,
+                this.friend,
+                FriendState.EXECUTING_TASK,
+                this.announcer,
+                "Using PlayerEngine to clear liquid at "
+                        + this.positionFormatter.apply(liquidPos)
+                        + " before digging "
+                        + this.safeLabel(label)
+                        + "."
+        );
+        return PassageClearResult.WORKING;
+    }
+
     void putOutFire(ServerLevel level, int range, double speed) {
         LocalBlockSafetyFallback.FireTargetSelection selection = this.fallback.selectFireTarget(level, range);
         if (selection.previousTargetCleared()
@@ -140,5 +186,15 @@ final class PlayerEngineBlockSafetyRunner {
         this.friend.getFriendBrain().failTask(result.message() == null || result.message().isBlank()
                 ? "Local block safety fallback failed."
                 : result.message());
+    }
+
+    private String safeLabel(String label) {
+        return label == null || label.isBlank() ? "the passage" : label;
+    }
+
+    enum PassageClearResult {
+        CLEARED,
+        WORKING,
+        UNAVAILABLE_OR_FAILED
     }
 }

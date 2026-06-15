@@ -1733,10 +1733,18 @@ public class LocalBehaviorController {
         }
 
         BlockPos target = fluidPos.get();
-        if (this.body.canUseHighLevelAcquisition() && this.body.clearLiquid(target)) {
+        PlayerEngineBlockSafetyRunner.PassageClearResult playerEngineClear =
+                this.playerEngineBlockSafetyRunner.tryClearPassageLiquid(level, target, label);
+        if (playerEngineClear == PlayerEngineBlockSafetyRunner.PassageClearResult.WORKING) {
             step.running("clearing liquid near " + label);
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            this.sayThrottled("Clearing liquid at " + this.formatPos(target) + " before digging " + label + ".");
+            return true;
+        }
+        if (playerEngineClear == PlayerEngineBlockSafetyRunner.PassageClearResult.CLEARED) {
+            step.running("cleared liquid near " + label);
+            this.sayThrottled("Cleared liquid at " + this.formatPos(target) + " before continuing the tunnel.");
+            if (rememberExpedition) {
+                this.rememberExpeditionHazardAvoided("fluid_clear", target, "cleared liquid before " + label);
+            }
             return true;
         }
 
