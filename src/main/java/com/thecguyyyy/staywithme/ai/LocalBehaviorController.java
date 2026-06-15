@@ -303,6 +303,7 @@ public class LocalBehaviorController {
     private final PlayerEngineExploreRunner playerEngineExploreRunner;
     private final PlayerEngineFuelRunner playerEngineFuelRunner;
     private final PlayerEngineConstructionMaterialRestockRunner playerEngineConstructionMaterialRestockRunner;
+    private final PlayerEngineThreatSafetyRunner playerEngineThreatSafetyRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -481,6 +482,15 @@ public class LocalBehaviorController {
                 this::countConstructionRepairBlocks,
                 this::invalidateConstructionPathPlanForMaterialRestock,
                 CONSTRUCTION_MATERIAL_RESTOCK_TARGET
+        );
+        this.playerEngineThreatSafetyRunner = new PlayerEngineThreatSafetyRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this::formatPos,
+                this.threatSafetyFallback
         );
     }
 
@@ -9849,178 +9859,19 @@ public class LocalBehaviorController {
     }
 
     private void retreatFromHostiles(FriendTask task) {
-        int distance = Math.max(4, task == null || task.amount() <= 0 ? 16 : task.amount());
-        Optional<LivingEntity> hostile = this.friend.getPerception().nearestHostile(distance);
-        if (hostile.isEmpty()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasRetreatFromHostilesFinished(distance)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            Optional<LivingEntity> remainingHostile = this.friend.getPerception().nearestHostile(distance);
-            if (remainingHostile.isEmpty()) {
-                this.friend.getFriendBrain().completeTask();
-            } else if (this.threatSafetyFallback.tryRetreatFromThreat(remainingHostile.get(), distance, TASK_SPEED)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("PlayerEngine retreat ended with a hostile still nearby, so I am moving to a local safe point.");
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine retreat finished, but hostile mobs are still nearby.");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            if (this.threatSafetyFallback.tryRetreatFromThreat(hostile.get(), distance, TASK_SPEED)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("Moving away from the hostile mob.");
-                return;
-            }
-            this.friend.getFriendBrain().failTask("I cannot find a safe local retreat path away from hostile mobs.");
-            return;
-        }
-        if (!this.body.retreatFromHostiles(distance)) {
-            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
-            this.resetPlayerEngineAcquisitionState();
-            if (this.threatSafetyFallback.tryRetreatFromThreat(hostile.get(), distance, TASK_SPEED)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("PlayerEngine hostile retreat did not start (" + status + "), so I am using a local retreat fallback.");
-                return;
-            }
-            this.friend.getFriendBrain().failTask("PlayerEngine hostile retreat did not start: " + status + ".");
-            return;
-        }
-        this.startPlayerEngineTask("retreat_hostiles", distance, "Using PlayerEngine to retreat from nearby hostile mobs.");
+        this.playerEngineThreatSafetyRunner.retreatFromHostiles(task, TASK_SPEED);
     }
 
     private void retreatFromCreepers(FriendTask task) {
-        int distance = Math.max(4, task == null || task.amount() <= 0 ? 10 : task.amount());
-        Optional<? extends LivingEntity> creeper = this.friend.getPerception().nearestCreeper(distance);
-        if (creeper.isEmpty()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasRetreatFromCreepersFinished(distance)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            if (this.friend.getPerception().nearestCreeper(distance).isEmpty()) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine creeper retreat finished, but a creeper is still nearby.");
-            }
-            return;
-        }
-        if (this.body.canUseHighLevelAcquisition() && this.body.retreatFromCreepers(distance)) {
-            this.startPlayerEngineTask("retreat_creepers", distance, "Using PlayerEngine to retreat from nearby creepers.");
-            return;
-        }
-        if (this.threatSafetyFallback.tryRetreatFromThreat(creeper.get(), distance, TASK_SPEED)) {
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            this.sayThrottled("Moving away from the creeper.");
-            return;
-        }
-        this.friend.getFriendBrain().failTask("I cannot find a safe local retreat path away from the creeper.");
+        this.playerEngineThreatSafetyRunner.retreatFromCreepers(task, TASK_SPEED);
     }
 
     private void dodgeProjectiles(FriendTask task) {
-        int horizontalDistance = Math.max(1, task == null || task.amount() <= 0 ? 4 : task.amount());
-        int verticalDistance = 3;
-        if (this.playerEngineTaskState.active()
-                && this.body.hasDodgeProjectilesFinished(horizontalDistance, verticalDistance)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            Optional<BlockPos> dodgeTarget = this.threatSafetyFallback.findProjectileDodgeTarget(horizontalDistance, verticalDistance);
-            if (dodgeTarget.isPresent()) {
-                this.body.moveToNearby(dodgeTarget.get(), TASK_SPEED);
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("Dodging to a local safe point at " + this.formatPos(dodgeTarget.get()) + ".");
-                return;
-            }
-            if (!this.threatSafetyFallback.hasProjectileDodgeThreat(horizontalDistance, verticalDistance)) {
-                this.body.stop();
-                this.resetPlayerEngineAcquisitionState();
-                this.friend.getFriendBrain().completeTask();
-                return;
-            }
-            this.friend.getFriendBrain().failTask("Dodging projectiles needs PlayerEngine or a reachable local dodge point.");
-            return;
-        }
-        if (!this.body.dodgeProjectiles(horizontalDistance, verticalDistance)) {
-            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
-            this.resetPlayerEngineAcquisitionState();
-            Optional<BlockPos> dodgeTarget = this.threatSafetyFallback.findProjectileDodgeTarget(horizontalDistance, verticalDistance);
-            if (dodgeTarget.isPresent()) {
-                this.body.moveToNearby(dodgeTarget.get(), TASK_SPEED);
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("PlayerEngine projectile dodge did not start (" + status + "), so I am using a local dodge point.");
-                return;
-            }
-            if (!this.threatSafetyFallback.hasProjectileDodgeThreat(horizontalDistance, verticalDistance)) {
-                this.friend.getFriendBrain().completeTask();
-                return;
-            }
-            this.friend.getFriendBrain().failTask("PlayerEngine projectile dodge did not start: " + status + ".");
-            return;
-        }
-        this.startPlayerEngineTask("dodge_projectiles", horizontalDistance, "Using PlayerEngine to dodge incoming projectiles.");
+        this.playerEngineThreatSafetyRunner.dodgeProjectiles(task, TASK_SPEED);
     }
 
     private void projectileProtectionWall(FriendTask task) {
-        int range = Math.max(4, task == null || task.amount() <= 0 ? 16 : task.amount());
-        Optional<Skeleton> threat = this.threatSafetyFallback.nearestSkeletonThreat(range);
-        if (threat.isEmpty()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.threatSafetyFallback.resetProjectileWallTarget();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasProjectileProtectionWallFinished()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            Optional<Skeleton> remainingThreat = this.threatSafetyFallback.nearestSkeletonThreat(range);
-            if (remainingThreat.isEmpty()) {
-                this.threatSafetyFallback.resetProjectileWallTarget();
-                this.friend.getFriendBrain().completeTask();
-            } else if (this.threatSafetyFallback.tryProjectileWall(task, remainingThreat.get(), TASK_SPEED)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("PlayerEngine projectile wall ended with a skeleton still aiming, so I am placing local cover.");
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine projectile wall finished, but a skeleton threat is still nearby.");
-            }
-            return;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            if (this.threatSafetyFallback.tryProjectileWall(task, threat.get(), TASK_SPEED)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("Placing local cover against the skeleton.");
-                return;
-            }
-            this.friend.getFriendBrain().failTask("Building a projectile protection wall needs PlayerEngine or a carried throwaway block with a reachable cover placement.");
-            return;
-        }
-        if (!this.body.projectileProtectionWall()) {
-            String status = PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 160);
-            this.resetPlayerEngineAcquisitionState();
-            if (this.threatSafetyFallback.tryProjectileWall(task, threat.get(), TASK_SPEED)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                this.sayThrottled("PlayerEngine projectile wall did not start (" + status + "), so I am placing local cover.");
-                return;
-            }
-            this.friend.getFriendBrain().failTask("PlayerEngine projectile protection wall did not start: " + status + ".");
-            return;
-        }
-        this.startPlayerEngineTask("projectile_wall", range, "Using PlayerEngine to build a projectile protection wall.");
+        this.playerEngineThreatSafetyRunner.projectileProtectionWall(task, TASK_SPEED);
     }
 
     private void attackNearbyHostile() {
