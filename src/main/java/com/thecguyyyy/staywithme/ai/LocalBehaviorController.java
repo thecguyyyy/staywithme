@@ -305,6 +305,7 @@ public class LocalBehaviorController {
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
     private final PlayerEngineFallbackTaskRunner playerEngineFallbackTaskRunner;
     private final PlayerEngineArmorEquipRunner playerEngineArmorEquipRunner;
+    private final PlayerEnginePlaceBlockRunner playerEnginePlaceBlockRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -421,6 +422,14 @@ public class LocalBehaviorController {
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled,
                 this.armorEquipFallback
+        );
+        this.playerEnginePlaceBlockRunner = new PlayerEnginePlaceBlockRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this::formatPos
         );
     }
 
@@ -1175,26 +1184,11 @@ public class LocalBehaviorController {
             return;
         }
         PlaceBlockTarget target = parsed.get();
-        if (this.isPlaceBlockTargetSatisfied(level, target)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.playerEngineTaskState.active()
-                && this.body.hasPlaceBlockAtFinished(target.position(), target.blockTarget())) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            if (this.isPlaceBlockTargetSatisfied(level, target)) {
-                this.friend.getFriendBrain().completeTask();
-            } else {
-                this.friend.getFriendBrain().failTask("PlayerEngine place-block task finished, but the target block was not placed.");
-            }
-            return;
-        }
-        if (this.body.canUseHighLevelAcquisition()
-                && this.body.placeBlockAt(target.position(), target.blockTarget())) {
-            this.startPlayerEngineTask("place:" + target.blockTarget(), 1, "Using PlayerEngine to place " + target.blockTarget() + " at " + this.formatPos(target.position()) + ".");
+        if (this.playerEnginePlaceBlockRunner.tick(
+                target.position(),
+                target.blockTarget(),
+                () -> this.isPlaceBlockTargetSatisfied(level, target)
+        )) {
             return;
         }
 
