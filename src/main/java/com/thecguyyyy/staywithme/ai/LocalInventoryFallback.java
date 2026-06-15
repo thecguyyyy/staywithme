@@ -152,6 +152,26 @@ final class LocalInventoryFallback {
         return !stack.isEmpty() && block != null && stack.is(block.asItem());
     }
 
+    Block supplyFurnaceBlockToPlace() {
+        if (this.hasFurnace()) {
+            return Blocks.FURNACE;
+        }
+        if (this.hasBlastFurnace()) {
+            return Blocks.BLAST_FURNACE;
+        }
+        return null;
+    }
+
+    int emptySlots() {
+        int empty = 0;
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            if (this.friend.getFriendInventory().getItem(slot).isEmpty()) {
+                empty++;
+            }
+        }
+        return empty;
+    }
+
     private int countFloorRepairItems(FriendTask task, Item item) {
         return this.canUseForFloorRepair(task, item)
                 ? this.friend.countInventoryItems(stack -> stack.is(item))

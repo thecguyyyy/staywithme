@@ -5268,13 +5268,7 @@ public class LocalBehaviorController {
     }
 
     private Block supplyFurnaceBlockToPlace() {
-        if (this.hasFurnace()) {
-            return Blocks.FURNACE;
-        }
-        if (this.hasBlastFurnace()) {
-            return Blocks.BLAST_FURNACE;
-        }
-        return null;
+        return this.inventoryFallback.supplyFurnaceBlockToPlace();
     }
 
     private int countWoodenAxes() {
@@ -5330,13 +5324,7 @@ public class LocalBehaviorController {
     }
 
     private int emptyInventorySlots() {
-        int empty = 0;
-        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
-            if (this.friend.getFriendInventory().getItem(slot).isEmpty()) {
-                empty++;
-            }
-        }
-        return empty;
+        return this.inventoryFallback.emptySlots();
     }
 
     private boolean ensureCraftingStation(ServerLevel level, WorkStep step) {
