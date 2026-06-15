@@ -280,8 +280,6 @@ public class LocalBehaviorController {
     private int constructionPathMoveStallTicks;
     private double constructionPathBestDistance = Double.MAX_VALUE;
     private int constructionPathNoProgressSegments;
-    private int constructionMaterialRestockTarget;
-    private String constructionMaterialRestockLabel = "none";
     private ConstructionVerticalAction constructionVerticalAction = ConstructionVerticalAction.NONE;
     private BlockPos constructionVerticalFrom;
     private BlockPos constructionVerticalTarget;
@@ -304,6 +302,7 @@ public class LocalBehaviorController {
     private final PlayerEngineYLevelRunner playerEngineYLevelRunner;
     private final PlayerEngineExploreRunner playerEngineExploreRunner;
     private final PlayerEngineFuelRunner playerEngineFuelRunner;
+    private final PlayerEngineConstructionMaterialRestockRunner playerEngineConstructionMaterialRestockRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -472,6 +471,16 @@ public class LocalBehaviorController {
                 () -> this.fuelCharcoalFallbackActive,
                 active -> this.fuelCharcoalFallbackActive = active,
                 this::executeFuelCharcoalFallback
+        );
+        this.playerEngineConstructionMaterialRestockRunner = new PlayerEngineConstructionMaterialRestockRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this::countConstructionRepairBlocks,
+                this::invalidateConstructionPathPlanForMaterialRestock,
+                CONSTRUCTION_MATERIAL_RESTOCK_TARGET
         );
     }
 
@@ -6348,45 +6357,15 @@ public class LocalBehaviorController {
     }
 
     private boolean isConstructionMaterialRestockActive() {
-        return this.playerEngineTaskState.active("construction_building_materials");
+        return this.playerEngineConstructionMaterialRestockRunner.active();
     }
 
     private boolean tickConstructionMaterialRestock(String label) {
-        if (this.playerEngineTaskState.active() && !this.isConstructionMaterialRestockActive()) {
-            return false;
-        }
-        if (!this.isConstructionMaterialRestockActive() && this.countConstructionRepairBlocks() > 0) {
-            return false;
-        }
-        if (!this.body.canUseHighLevelAcquisition()) {
-            return false;
-        }
-
-        int target = this.constructionMaterialRestockTarget > 0
-                ? this.constructionMaterialRestockTarget
-                : CONSTRUCTION_MATERIAL_RESTOCK_TARGET;
-        if (this.isConstructionMaterialRestockActive()
-                && this.body.hasBuildingMaterialsCollectionFinished(target)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.invalidateConstructionPathPlanForMaterialRestock();
-            return false;
-        }
-        if (!this.body.collectBuildingMaterials(target)) {
-            this.resetPlayerEngineAcquisitionState();
-            this.invalidateConstructionPathPlanForMaterialRestock();
-            return false;
-        }
-
-        this.constructionMaterialRestockTarget = target;
-        this.constructionMaterialRestockLabel = label == null || label.isBlank() ? "construction route" : label;
-        this.startPlayerEngineTask("construction_building_materials", target, "I need route blocks, so I am using PlayerEngine to collect building materials.");
-        return true;
+        return this.playerEngineConstructionMaterialRestockRunner.tick(label);
     }
 
     private void resetConstructionMaterialRestockState() {
-        this.constructionMaterialRestockTarget = 0;
-        this.constructionMaterialRestockLabel = "none";
+        this.playerEngineConstructionMaterialRestockRunner.reset();
     }
 
     private void invalidateConstructionPathPlanForMaterialRestock() {
@@ -6584,9 +6563,7 @@ public class LocalBehaviorController {
                 + ",repairBlocks="
                 + this.countConstructionRepairBlocks()
                 + ",materialRestock="
-                + (this.isConstructionMaterialRestockActive()
-                        ? this.constructionMaterialRestockTarget + ":" + this.constructionMaterialRestockLabel
-                        : "none");
+                + this.playerEngineConstructionMaterialRestockRunner.summary();
     }
 
     private Optional<BlockPos> findNearbyCraftingTable(ServerLevel level, int radius) {
