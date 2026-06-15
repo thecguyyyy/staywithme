@@ -299,6 +299,7 @@ public class LocalBehaviorController {
     private final PlayerEngineItemTransferRunner playerEngineItemTransferRunner;
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
     private final PlayerEngineFallbackTaskRunner playerEngineFallbackTaskRunner;
+    private final PlayerEngineHazardEscapeRunner playerEngineHazardEscapeRunner;
     private final PlayerEngineArmorEquipRunner playerEngineArmorEquipRunner;
     private final PlayerEnginePlaceBlockRunner playerEnginePlaceBlockRunner;
     private final PlayerEngineBlockSafetyRunner playerEngineBlockSafetyRunner;
@@ -455,6 +456,15 @@ public class LocalBehaviorController {
                 this.playerEngineTaskState,
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled
+        );
+        this.playerEngineHazardEscapeRunner = new PlayerEngineHazardEscapeRunner(
+                body,
+                friend,
+                this.playerEngineFallbackTaskRunner,
+                this.hazardEscapeFallback,
+                this::formatPos,
+                this::sayThrottled,
+                TASK_SPEED
         );
         this.playerEngineArmorEquipRunner = new PlayerEngineArmorEquipRunner(
                 body,
@@ -1524,62 +1534,14 @@ public class LocalBehaviorController {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        this.playerEngineFallbackTaskRunner.run(
-                "get_out_of_water",
-                0,
-                () -> !this.friend.isInWater() && this.friend.onGround(),
-                this.body::hasGetOutOfWaterFinished,
-                this.body::getOutOfWater,
-                () -> this.tryForgeGetOutOfWater(serverLevel),
-                "I cannot find a dry reachable stand position nearby.",
-                "PlayerEngine water escape finished, but I am still not safely on dry ground.",
-                null,
-                status -> "PlayerEngine water escape did not start: " + status + ".",
-                status -> "PlayerEngine water escape did not start (" + status + "), so I am using a local dry-ground fallback.",
-                "Using PlayerEngine to get out of water."
-        );
-    }
-
-    private boolean tryForgeGetOutOfWater(ServerLevel level) {
-        Optional<BlockPos> target = this.hazardEscapeFallback.findDryStandPosition(level, 12);
-        if (target.isEmpty()) {
-            return false;
-        }
-        this.body.moveToNearby(target.get(), TASK_SPEED);
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        this.sayThrottled("Moving to dry ground at " + this.formatPos(target.get()) + ".");
-        return true;
+        this.playerEngineHazardEscapeRunner.getOutOfWater(serverLevel);
     }
 
     private void escapeLava() {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        this.playerEngineFallbackTaskRunner.run(
-                "escape_lava",
-                0,
-                () -> !this.friend.isInLava() && !this.friend.isOnFire(),
-                this.body::hasEscapeLavaFinished,
-                this.body::escapeLava,
-                () -> this.tryForgeEscapeLava(serverLevel),
-                "I cannot find a reachable lava-safe stand position nearby.",
-                "PlayerEngine lava escape finished, but I am still in danger.",
-                "PlayerEngine lava escape ended with danger remaining, so I am moving to local safe ground.",
-                status -> "PlayerEngine lava escape did not start: " + status + ".",
-                status -> "PlayerEngine lava escape did not start (" + status + "), so I am using a local safe-ground fallback.",
-                "Using PlayerEngine to escape lava."
-        );
-    }
-
-    private boolean tryForgeEscapeLava(ServerLevel level) {
-        Optional<BlockPos> target = this.hazardEscapeFallback.findLavaSafeStandPosition(level, 12);
-        if (target.isEmpty()) {
-            return false;
-        }
-        this.body.moveToNearby(target.get(), TASK_SPEED);
-        this.friend.setFriendState(FriendState.EXECUTING_TASK);
-        this.sayThrottled("Moving away from lava to " + this.formatPos(target.get()) + ".");
-        return true;
+        this.playerEngineHazardEscapeRunner.escapeLava(serverLevel);
     }
 
     private void clearLiquid(FriendTask task) {
