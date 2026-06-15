@@ -215,9 +215,6 @@ public class LocalBehaviorController {
     private String resourceDetachmentSource = "none";
     private String resourceDetachmentStatus = "idle";
     private boolean resourceDetachmentLocalAttempted;
-    private String descendPlayerEngineLayerStep;
-    private int descendPlayerEngineTargetY = Integer.MIN_VALUE;
-    private boolean descendPlayerEngineAttempted;
     private BlockPos expeditionDigTarget;
     private Direction expeditionDirection;
     private BlockPos expeditionSupplyPoint;
@@ -304,6 +301,7 @@ public class LocalBehaviorController {
     private final PlayerEnginePlaceBlockRunner playerEnginePlaceBlockRunner;
     private final PlayerEngineBlockSafetyRunner playerEngineBlockSafetyRunner;
     private final PlayerEngineRemoteTravelRunner playerEngineRemoteTravelRunner;
+    private final PlayerEngineYLevelRunner playerEngineYLevelRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -446,6 +444,13 @@ public class LocalBehaviorController {
                 this::resetConstructionPathRecovery,
                 this::sayThrottled,
                 this::formatPos
+        );
+        this.playerEngineYLevelRunner = new PlayerEngineYLevelRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
         );
     }
 
@@ -3430,53 +3435,11 @@ public class LocalBehaviorController {
     }
 
     private boolean tryDescendWithPlayerEngineYTask(WorkStep step, int targetY) {
-        String stepTarget = step == null ? "" : step.target();
-        if (!Objects.equals(this.descendPlayerEngineLayerStep, stepTarget)
-                || this.descendPlayerEngineTargetY != targetY) {
-            this.descendPlayerEngineLayerStep = stepTarget;
-            this.descendPlayerEngineTargetY = targetY;
-            this.descendPlayerEngineAttempted = false;
-        }
-
-        if (this.playerEngineTaskState.active("goto_y")
-                && this.playerEngineTaskState.amount() == targetY) {
-            if (!this.body.hasGoToYLevelFinished(targetY)) {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                step.running("PlayerEngine moving to Y " + targetY);
-                return true;
-            }
-            this.resetPlayerEngineAcquisitionState();
-            this.descendPlayerEngineAttempted = true;
-            this.sayThrottled("PlayerEngine Y-layer move ended; falling back to local staircase if the layer is not reached.");
-            return false;
-        }
-
-        if (this.descendPlayerEngineAttempted || !this.body.canUseHighLevelAcquisition()) {
-            return false;
-        }
-
-        this.descendPlayerEngineAttempted = true;
-        if (!this.body.goToYLevel(targetY)) {
-            this.sayThrottled("PlayerEngine Y-layer movement did not start ("
-                    + PlayerEngineStatusText.shortStatus(this.body.highLevelAcquisitionStatus(), 120)
-                    + "). Digging a local staircase instead.");
-            this.resetPlayerEngineAcquisitionState();
-            return false;
-        }
-
-        this.startPlayerEngineTask(
-                "goto_y",
-                targetY,
-                "Using PlayerEngine to reach mining Y layer " + targetY + " before local staircase fallback."
-        );
-        step.running("PlayerEngine moving to Y " + targetY);
-        return true;
+        return this.playerEngineYLevelRunner.tryReach(step, targetY);
     }
 
     private void resetDescendPlayerEngineAttempt() {
-        this.descendPlayerEngineLayerStep = null;
-        this.descendPlayerEngineTargetY = Integer.MIN_VALUE;
-        this.descendPlayerEngineAttempted = false;
+        this.playerEngineYLevelRunner.reset();
     }
 
     private boolean executeBranchMineResourceStep(ServerLevel serverLevel, WorkStep step) {
