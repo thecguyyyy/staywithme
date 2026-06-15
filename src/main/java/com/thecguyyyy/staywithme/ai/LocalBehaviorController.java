@@ -39,7 +39,6 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Skeleton;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -163,6 +162,7 @@ public class LocalBehaviorController {
     private final LocalHazardEscapeFallback hazardEscapeFallback;
     private final LocalBlockSafetyFallback blockSafetyFallback;
     private final LocalThreatSafetyFallback threatSafetyFallback;
+    private final PlayerEngineResumeValidator playerEngineResumeValidator;
     private String pendingRestoredWorkflowId;
     private int pendingRestoredWorkflowIndex = -1;
     private int pendingRestoredWorkflowStepCount = -1;
@@ -377,6 +377,19 @@ public class LocalBehaviorController {
                         return LocalBehaviorController.this.findStandPositionNearBlock(level, target);
                     }
                 }
+        );
+        this.playerEngineResumeValidator = new PlayerEngineResumeValidator(
+                body,
+                friend,
+                this.inventoryFallback,
+                this.hazardEscapeFallback,
+                this.threatSafetyFallback,
+                this.armorEquipFallback,
+                this::fuelAmountForTask,
+                task -> this.createWorkflowFor(task) != null,
+                this::isSmeltItemSatisfied,
+                this::isPickupDroppedItemSatisfied,
+                this::isBuildingMaterialsSatisfied
         );
         this.playerEngineAcquisitionRunner = new PlayerEngineAcquisitionRunner(
                 body,
@@ -1046,93 +1059,9 @@ public class LocalBehaviorController {
                 return dimensionProblem;
             }
         }
-        if (task.type() == FriendTaskType.COLLECT_FOOD
-                && !this.body.canUseHighLevelAcquisition()
-                && this.carriedFoodUnits() < Math.max(1, task.amount())) {
-            return Optional.of("the saved food collection task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if (task.type() == FriendTaskType.COLLECT_MEAT
-                && !this.body.canUseHighLevelAcquisition()
-                && this.carriedMeatFoodUnits() < Math.max(1, task.amount())) {
-            return Optional.of("the saved meat collection task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if (task.type() == FriendTaskType.COLLECT_FUEL
-                && !this.body.canUseHighLevelAcquisition()
-                && this.countCoalEquivalent() < this.fuelAmountForTask(task)
-                && this.createWorkflowFor(task) == null) {
-            return Optional.of("the saved fuel collection task needs PlayerEngine, but no charcoal fallback workflow is available");
-        }
-        if (task.type() == FriendTaskType.SMELT_ITEM
-                && !this.isSmeltItemSatisfied(task)
-                && !this.body.canUseHighLevelAcquisition()) {
-            return Optional.of("the saved smelting task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if (task.type() == FriendTaskType.GET_OUT_OF_WATER
-                && !this.body.canUseHighLevelAcquisition()
-                && (this.friend.isInWater() || !this.friend.onGround())
-                && (!(this.friend.level() instanceof ServerLevel serverLevel)
-                || this.hazardEscapeFallback.findDryStandPosition(serverLevel, 12).isEmpty())) {
-            return Optional.of("the saved water escape task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if (task.type() == FriendTaskType.ESCAPE_LAVA
-                && !this.body.canUseHighLevelAcquisition()
-                && (this.friend.isInLava() || this.friend.isOnFire())
-                && (!(this.friend.level() instanceof ServerLevel serverLevel)
-                || this.hazardEscapeFallback.findLavaSafeStandPosition(serverLevel, 12).isEmpty())) {
-            return Optional.of("the saved lava escape task needs PlayerEngine, but no local lava-safe stand position is reachable");
-        }
-        if (task.type() == FriendTaskType.RETREAT_FROM_HOSTILES
-                && !this.body.canUseHighLevelAcquisition()) {
-            int distance = Math.max(4, task.amount() <= 0 ? 16 : task.amount());
-            Optional<LivingEntity> hostile = this.friend.getPerception().nearestHostile(distance);
-            if (hostile.isPresent()
-                    && (!(this.friend.level() instanceof ServerLevel serverLevel)
-                    || this.threatSafetyFallback.findThreatRetreatStandPos(serverLevel, hostile.get(), distance).isEmpty())) {
-                return Optional.of("the saved hostile-retreat task needs PlayerEngine, but no local retreat point is reachable");
-            }
-        }
-        if (task.type() == FriendTaskType.DODGE_PROJECTILES
-                && !this.body.canUseHighLevelAcquisition()) {
-            int horizontalDistance = Math.max(1, task.amount() <= 0 ? 4 : task.amount());
-            int verticalDistance = 3;
-            if (this.threatSafetyFallback.hasProjectileDodgeThreat(horizontalDistance, verticalDistance)
-                    && this.threatSafetyFallback.findProjectileDodgeTarget(horizontalDistance, verticalDistance).isEmpty()) {
-                return Optional.of("the saved projectile-dodge task needs PlayerEngine or a reachable local dodge target");
-            }
-        }
-        if (task.type() == FriendTaskType.PROJECTILE_PROTECTION_WALL
-                && !this.body.canUseHighLevelAcquisition()) {
-            int range = Math.max(4, task.amount() <= 0 ? 16 : task.amount());
-            Optional<Skeleton> skeleton = this.threatSafetyFallback.nearestSkeletonThreat(range);
-            if (skeleton.isPresent()
-                    && (!(this.friend.level() instanceof ServerLevel serverLevel)
-                    || this.threatSafetyFallback.findProjectileWallPlaceTarget(task, serverLevel, skeleton.get()).isEmpty())) {
-                return Optional.of("the saved projectile-wall task needs PlayerEngine or a reachable local wall placement with a carried throwaway block");
-            }
-        }
-        if (task.type() == FriendTaskType.PICKUP_DROPPED_ITEM
-                && !this.isPickupDroppedItemSatisfied(task)
-                && !this.body.canUseHighLevelAcquisition()) {
-            return Optional.of("the saved pickup task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if (task.type() == FriendTaskType.COLLECT_BUILDING_MATERIALS
-                && !this.isBuildingMaterialsSatisfied(task)
-                && !this.body.canUseHighLevelAcquisition()) {
-            return Optional.of("the saved building-material task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if ((task.type() == FriendTaskType.FISH
-                || task.type() == FriendTaskType.FARM
-                || task.type() == FriendTaskType.SLEEP_THROUGH_NIGHT
-                || task.type() == FriendTaskType.GIVE_ITEM
-                || task.type() == FriendTaskType.DEPOSIT_INVENTORY
-                || task.type() == FriendTaskType.PROTECT_PLAYER)
-                && !this.body.canUseHighLevelAcquisition()) {
-            return Optional.of("the saved task needs PlayerEngine, but PlayerEngine is not available");
-        }
-        if (task.type() == FriendTaskType.EQUIP_ARMOR
-                && !this.body.canUseHighLevelAcquisition()
-                && !this.armorEquipFallback.canEquip(task.target() == null || task.target().isBlank() ? "iron" : task.target())) {
-            return Optional.of("the saved armor equip task needs PlayerEngine to obtain missing armor");
+        Optional<String> playerEngineProblem = this.playerEngineResumeValidator.validate(task);
+        if (playerEngineProblem.isPresent()) {
+            return playerEngineProblem;
         }
         if (this.isWorkflowTask(task.type()) && this.createWorkflowFor(task) == null) {
             if ((task.type() == FriendTaskType.GET_ITEM || task.type() == FriendTaskType.CRAFT_ITEM)
