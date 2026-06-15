@@ -306,6 +306,7 @@ public class LocalBehaviorController {
     private final PlayerEngineFallbackTaskRunner playerEngineFallbackTaskRunner;
     private final PlayerEngineArmorEquipRunner playerEngineArmorEquipRunner;
     private final PlayerEnginePlaceBlockRunner playerEnginePlaceBlockRunner;
+    private final PlayerEngineBlockSafetyRunner playerEngineBlockSafetyRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -430,6 +431,15 @@ public class LocalBehaviorController {
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled,
                 this::formatPos
+        );
+        this.playerEngineBlockSafetyRunner = new PlayerEngineBlockSafetyRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled,
+                this::formatPos,
+                this.blockSafetyFallback
         );
     }
 
@@ -1694,52 +1704,7 @@ public class LocalBehaviorController {
         }
 
         BlockPos liquidPos = parsedTarget.get();
-        if (LocalBlockSafetyFallback.isLiquidCleared(serverLevel, liquidPos)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-
-        if (this.playerEngineTaskState.active("clear_liquid")) {
-            if (this.body.hasClearLiquidFinished(liquidPos)) {
-                this.body.stop();
-                this.resetPlayerEngineAcquisitionState();
-                if (LocalBlockSafetyFallback.isLiquidCleared(serverLevel, liquidPos)) {
-                    this.friend.getFriendBrain().completeTask();
-                } else {
-                    this.friend.getFriendBrain().failTask("PlayerEngine clear-liquid task finished, but liquid remains at " + this.formatPos(liquidPos) + ".");
-                }
-                return;
-            }
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            return;
-        }
-
-        if (this.body.canUseHighLevelAcquisition() && this.body.clearLiquid(liquidPos)) {
-            this.startPlayerEngineTask("clear_liquid", 1, "Using PlayerEngine to clear liquid at " + this.formatPos(liquidPos) + ".");
-            return;
-        }
-
-        this.applyBlockSafetyFallbackResult(this.blockSafetyFallback.tickClearLiquid(serverLevel, liquidPos, task, TASK_SPEED));
-    }
-
-    private void applyBlockSafetyFallbackResult(LocalBlockSafetyFallback.ActionResult result) {
-        if (result.status() == LocalBlockSafetyFallback.Status.DONE) {
-            this.body.stop();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (result.status() == LocalBlockSafetyFallback.Status.WORKING) {
-            this.friend.setFriendState(FriendState.EXECUTING_TASK);
-            if (result.message() != null && !result.message().isBlank()) {
-                this.sayThrottled(result.message());
-            }
-            return;
-        }
-        this.friend.getFriendBrain().failTask(result.message() == null || result.message().isBlank()
-                ? "Local block safety fallback failed."
-                : result.message());
+        this.playerEngineBlockSafetyRunner.clearLiquid(serverLevel, liquidPos, task, TASK_SPEED);
     }
 
     private boolean tryClearNearbyPassageFluid(
@@ -1831,44 +1796,7 @@ public class LocalBehaviorController {
         }
 
         int range = Math.max(1, Math.min(32, task == null || task.amount() <= 0 ? 8 : task.amount()));
-        LocalBlockSafetyFallback.FireTargetSelection selection = this.blockSafetyFallback.selectFireTarget(serverLevel, range);
-        if (selection.previousTargetCleared()
-                && this.playerEngineTaskState.active("put_out_fire")) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-        }
-
-        Optional<BlockPos> fireTarget = selection.target();
-        if (fireTarget.isEmpty()) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-
-        if (this.playerEngineTaskState.active("put_out_fire")) {
-            if (this.body.hasPutOutFireFinished(fireTarget.get())) {
-                this.body.stop();
-                this.resetPlayerEngineAcquisitionState();
-                this.blockSafetyFallback.resetFireTarget();
-            } else {
-                this.friend.setFriendState(FriendState.EXECUTING_TASK);
-                return;
-            }
-        }
-
-        fireTarget = this.blockSafetyFallback.selectFireTarget(serverLevel, range).target();
-        if (fireTarget.isEmpty()) {
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-
-        if (this.body.canUseHighLevelAcquisition() && this.body.putOutFire(fireTarget.get())) {
-            this.startPlayerEngineTask("put_out_fire", range, "Using PlayerEngine to put out nearby fire.");
-            return;
-        }
-
-        this.applyBlockSafetyFallbackResult(this.blockSafetyFallback.tickPutOutFire(serverLevel, range, TASK_SPEED));
+        this.playerEngineBlockSafetyRunner.putOutFire(serverLevel, range, TASK_SPEED);
     }
 
     private void equipArmor(FriendTask task) {
