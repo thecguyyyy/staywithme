@@ -292,6 +292,7 @@ public class LocalBehaviorController {
     private final PlayerEngineAcquisitionRunner playerEngineAcquisitionRunner;
     private final PlayerEngineCountedTaskRunner playerEngineCountedTaskRunner;
     private final PlayerEngineCollectionRunner playerEngineCollectionRunner;
+    private final PlayerEngineSmeltingRunner playerEngineSmeltingRunner;
     private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
     private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
@@ -412,6 +413,12 @@ public class LocalBehaviorController {
                 this::countConstructionRepairBlocks,
                 this::carriedFoodUnits,
                 this::carriedMeatFoodUnits
+        );
+        this.playerEngineSmeltingRunner = new PlayerEngineSmeltingRunner(
+                body,
+                friend,
+                this.playerEngineCountedTaskRunner,
+                this::countSmeltOutput
         );
         this.playerEngineStartOnlyTaskRunner = new PlayerEngineStartOnlyTaskRunner(
                 body,
@@ -1417,25 +1424,7 @@ public class LocalBehaviorController {
     }
 
     private void smeltItem(FriendTask task) {
-        Optional<String> normalizedTarget = normalizeSmeltOutputTarget(task == null ? null : task.target());
-        if (normalizedTarget.isEmpty()) {
-            this.friend.getFriendBrain().failTask("I can only smelt iron_ingot, gold_ingot, copper_ingot, or charcoal right now.");
-            return;
-        }
-
-        String target = normalizedTarget.get();
-        int amount = Math.max(1, task == null || task.amount() <= 0 ? 1 : task.amount());
-        this.playerEngineCountedTaskRunner.run(
-                "smelt:" + target,
-                amount,
-                () -> this.countSmeltOutput(target) >= amount,
-                () -> this.body.hasSmeltItemFinished(target, amount),
-                () -> this.body.smeltItem(target, amount),
-                "Smelting " + target + " needs PlayerEngine right now; Forge fallback only completes if the output is already carried.",
-                "PlayerEngine smelting finished, but I still do not have enough " + target + ".",
-                "PlayerEngine smelting did not start for " + target + " x" + amount + ": ",
-                "Using PlayerEngine furnace smelting for " + target + " x" + amount + "."
-        );
+        this.playerEngineSmeltingRunner.smelt(task);
     }
 
     private void fish(FriendTask task) {
@@ -5461,12 +5450,7 @@ public class LocalBehaviorController {
     }
 
     private boolean isSmeltItemSatisfied(FriendTask task) {
-        if (task == null) {
-            return false;
-        }
-        Optional<String> target = normalizeSmeltOutputTarget(task.target());
-        return target.isPresent()
-                && this.countSmeltOutput(target.get()) >= Math.max(1, task.amount());
+        return this.playerEngineSmeltingRunner.isSatisfied(task);
     }
 
     private int countSmeltOutput(String normalizedTarget) {
@@ -5476,26 +5460,6 @@ public class LocalBehaviorController {
             case "copper_ingot" -> this.friend.countInventoryItems(stack -> stack.is(Items.COPPER_INGOT));
             case "charcoal" -> this.countCharcoal();
             default -> 0;
-        };
-    }
-
-    private static Optional<String> normalizeSmeltOutputTarget(String rawTarget) {
-        if (rawTarget == null || rawTarget.isBlank()) {
-            return Optional.empty();
-        }
-        String normalized = rawTarget.trim().toLowerCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
-        if (normalized.contains("/") || normalized.contains("\\")) {
-            return Optional.empty();
-        }
-        if (normalized.startsWith("minecraft:")) {
-            normalized = normalized.substring("minecraft:".length());
-        }
-        return switch (normalized) {
-            case "iron", "raw_iron", "iron_ingot" -> Optional.of("iron_ingot");
-            case "gold", "raw_gold", "gold_ingot" -> Optional.of("gold_ingot");
-            case "copper", "raw_copper", "copper_ingot" -> Optional.of("copper_ingot");
-            case "charcoal" -> Optional.of("charcoal");
-            default -> Optional.empty();
         };
     }
 
