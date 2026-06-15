@@ -5129,7 +5129,7 @@ public class LocalBehaviorController {
     }
 
     private int countPlanks() {
-        return this.friend.countInventoryItems(stack -> stack.is(ItemTags.PLANKS));
+        return this.inventoryFallback.countPlanks();
     }
 
     private int availablePlankEquivalent() {
@@ -5232,27 +5232,27 @@ public class LocalBehaviorController {
     }
 
     private int countLogs() {
-        return this.friend.countInventoryItems(stack -> stack.is(ItemTags.LOGS));
+        return this.inventoryFallback.countLogs();
     }
 
     private int countSticks() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.STICK));
+        return this.inventoryFallback.countSticks();
     }
 
     private boolean hasCraftingTable() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.CRAFTING_TABLE)) > 0;
+        return this.inventoryFallback.hasCraftingTable();
     }
 
     private boolean hasChest() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.CHEST)) > 0;
+        return this.inventoryFallback.hasChest();
     }
 
     private boolean hasFurnace() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.FURNACE)) > 0;
+        return this.inventoryFallback.hasFurnace();
     }
 
     private boolean hasBlastFurnace() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.BLAST_FURNACE)) > 0;
+        return this.inventoryFallback.hasBlastFurnace();
     }
 
     private Block expeditionFloorRepairBlockToPlace(FriendTask task) {
@@ -5312,15 +5312,15 @@ public class LocalBehaviorController {
     }
 
     private int countWoodenAxes() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.WOODEN_AXE));
+        return this.inventoryFallback.countWoodenAxes();
     }
 
     private int countWoodenPickaxes() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.WOODEN_PICKAXE));
+        return this.inventoryFallback.countWoodenPickaxes();
     }
 
     private int countStonePickaxes() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.STONE_PICKAXE));
+        return this.inventoryFallback.countStonePickaxes();
     }
 
     private int countCoal() {
@@ -5332,7 +5332,7 @@ public class LocalBehaviorController {
     }
 
     private int countCharcoal() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.CHARCOAL));
+        return this.inventoryFallback.countCharcoal();
     }
 
     private boolean isSmeltItemSatisfied(FriendTask task) {
@@ -5340,13 +5340,7 @@ public class LocalBehaviorController {
     }
 
     private int countSmeltOutput(String normalizedTarget) {
-        return switch (normalizedTarget) {
-            case "iron_ingot" -> this.countIronIngots();
-            case "gold_ingot" -> this.friend.countInventoryItems(stack -> stack.is(Items.GOLD_INGOT));
-            case "copper_ingot" -> this.friend.countInventoryItems(stack -> stack.is(Items.COPPER_INGOT));
-            case "charcoal" -> this.countCharcoal();
-            default -> 0;
-        };
+        return this.inventoryFallback.countSmeltOutput(normalizedTarget);
     }
 
     private boolean isCoalEquivalent(ItemStack stack) {
@@ -5354,19 +5348,19 @@ public class LocalBehaviorController {
     }
 
     private int countRawIron() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.RAW_IRON));
+        return this.inventoryFallback.countRawIron();
     }
 
     private int countIronIngots() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.IRON_INGOT));
+        return this.inventoryFallback.countIronIngots();
     }
 
     private int countIronPickaxes() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.IRON_PICKAXE));
+        return this.inventoryFallback.countIronPickaxes();
     }
 
     private int countTorches() {
-        return this.friend.countInventoryItems(stack -> stack.is(Items.TORCH));
+        return this.inventoryFallback.countTorches();
     }
 
     private int emptyInventorySlots() {

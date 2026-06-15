@@ -51,6 +51,76 @@ final class LocalInventoryFallback {
         return this.friend.countInventoryItems(this::isCoalEquivalent);
     }
 
+    int countPlanks() {
+        return this.friend.countInventoryItems(stack -> stack.is(ItemTags.PLANKS));
+    }
+
+    int countLogs() {
+        return this.friend.countInventoryItems(stack -> stack.is(ItemTags.LOGS));
+    }
+
+    int countSticks() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.STICK));
+    }
+
+    boolean hasCraftingTable() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.CRAFTING_TABLE)) > 0;
+    }
+
+    boolean hasChest() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.CHEST)) > 0;
+    }
+
+    boolean hasFurnace() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.FURNACE)) > 0;
+    }
+
+    boolean hasBlastFurnace() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.BLAST_FURNACE)) > 0;
+    }
+
+    int countWoodenAxes() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.WOODEN_AXE));
+    }
+
+    int countWoodenPickaxes() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.WOODEN_PICKAXE));
+    }
+
+    int countStonePickaxes() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.STONE_PICKAXE));
+    }
+
+    int countCharcoal() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.CHARCOAL));
+    }
+
+    int countRawIron() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.RAW_IRON));
+    }
+
+    int countIronIngots() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.IRON_INGOT));
+    }
+
+    int countIronPickaxes() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.IRON_PICKAXE));
+    }
+
+    int countTorches() {
+        return this.friend.countInventoryItems(stack -> stack.is(Items.TORCH));
+    }
+
+    int countSmeltOutput(String normalizedTarget) {
+        return switch (normalizedTarget) {
+            case "iron_ingot" -> this.countIronIngots();
+            case "gold_ingot" -> this.friend.countInventoryItems(stack -> stack.is(Items.GOLD_INGOT));
+            case "copper_ingot" -> this.friend.countInventoryItems(stack -> stack.is(Items.COPPER_INGOT));
+            case "charcoal" -> this.countCharcoal();
+            default -> 0;
+        };
+    }
+
     boolean isCoalEquivalent(ItemStack stack) {
         return !stack.isEmpty() && (stack.is(Items.COAL) || stack.is(Items.CHARCOAL));
     }
