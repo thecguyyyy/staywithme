@@ -26,6 +26,27 @@ final class LocalInventoryFallback {
         return this.friend.countInventoryItems(this::isExpeditionFood);
     }
 
+    int bestCarriedFoodSlot() {
+        int bestSlot = -1;
+        int bestNutrition = -1;
+        float bestSaturation = -1.0F;
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (!this.isExpeditionFood(stack)) {
+                continue;
+            }
+            FoodProperties food = stack.getFoodProperties(this.friend);
+            float saturation = food.getNutrition() * food.getSaturationModifier();
+            if (food.getNutrition() > bestNutrition
+                    || (food.getNutrition() == bestNutrition && saturation > bestSaturation)) {
+                bestSlot = slot;
+                bestNutrition = food.getNutrition();
+                bestSaturation = saturation;
+            }
+        }
+        return bestSlot;
+    }
+
     int carriedFoodUnits() {
         int total = 0;
         for (int slot = 0; slot < this.friend.getInventoryProvider().getContainerSize(); slot++) {
