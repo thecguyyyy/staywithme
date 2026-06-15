@@ -5256,49 +5256,15 @@ public class LocalBehaviorController {
     }
 
     private Block expeditionFloorRepairBlockToPlace(FriendTask task) {
-        if (this.canUseForFloorRepair(task, Items.COBBLESTONE)) {
-            return Blocks.COBBLESTONE;
-        }
-        if (this.canUseForFloorRepair(task, Items.COBBLED_DEEPSLATE)) {
-            return Blocks.COBBLED_DEEPSLATE;
-        }
-        if (this.canUseForFloorRepair(task, Items.DIRT)) {
-            return Blocks.DIRT;
-        }
-        if (this.canUseForFloorRepair(task, Items.NETHERRACK)) {
-            return Blocks.NETHERRACK;
-        }
-        return null;
+        return this.inventoryFallback.floorRepairBlockToPlace(task);
     }
 
     private int countConstructionRepairBlocks() {
-        FriendTask task = this.friend.getCurrentTask();
-        return this.countFloorRepairItems(task, Items.COBBLESTONE)
-                + this.countFloorRepairItems(task, Items.COBBLED_DEEPSLATE)
-                + this.countFloorRepairItems(task, Items.DIRT)
-                + this.countFloorRepairItems(task, Items.NETHERRACK);
-    }
-
-    private int countFloorRepairItems(FriendTask task, net.minecraft.world.item.Item item) {
-        return this.canUseForFloorRepair(task, item)
-                ? this.friend.countInventoryItems(stack -> stack.is(item))
-                : 0;
-    }
-
-    private boolean canUseForFloorRepair(FriendTask task, net.minecraft.world.item.Item item) {
-        if (item == null || this.friend.countInventoryItems(stack -> stack.is(item)) <= 0) {
-            return false;
-        }
-        if (task == null || task.target() == null || task.target().isBlank()) {
-            return true;
-        }
-        return MiningTargetRegistry.find(task.target())
-                .map(target -> !target.inventoryMatcher().test(new ItemStack(item)))
-                .orElse(true);
+        return this.inventoryFallback.countConstructionRepairBlocks(this.friend.getCurrentTask());
     }
 
     private boolean isMatchingFloorRepairBlock(ItemStack stack, Block block) {
-        return !stack.isEmpty() && block != null && stack.is(block.asItem());
+        return this.inventoryFallback.isMatchingFloorRepairBlock(stack, block);
     }
 
     private Block supplyFurnaceBlockToPlace() {

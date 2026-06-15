@@ -1,10 +1,14 @@
 package com.thecguyyyy.staywithme.ai;
 
+import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.food.FoodProperties;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 
 final class LocalInventoryFallback {
     private final FriendEntity friend;
@@ -119,6 +123,51 @@ final class LocalInventoryFallback {
             case "charcoal" -> this.countCharcoal();
             default -> 0;
         };
+    }
+
+    Block floorRepairBlockToPlace(FriendTask task) {
+        if (this.canUseForFloorRepair(task, Items.COBBLESTONE)) {
+            return Blocks.COBBLESTONE;
+        }
+        if (this.canUseForFloorRepair(task, Items.COBBLED_DEEPSLATE)) {
+            return Blocks.COBBLED_DEEPSLATE;
+        }
+        if (this.canUseForFloorRepair(task, Items.DIRT)) {
+            return Blocks.DIRT;
+        }
+        if (this.canUseForFloorRepair(task, Items.NETHERRACK)) {
+            return Blocks.NETHERRACK;
+        }
+        return null;
+    }
+
+    int countConstructionRepairBlocks(FriendTask task) {
+        return this.countFloorRepairItems(task, Items.COBBLESTONE)
+                + this.countFloorRepairItems(task, Items.COBBLED_DEEPSLATE)
+                + this.countFloorRepairItems(task, Items.DIRT)
+                + this.countFloorRepairItems(task, Items.NETHERRACK);
+    }
+
+    boolean isMatchingFloorRepairBlock(ItemStack stack, Block block) {
+        return !stack.isEmpty() && block != null && stack.is(block.asItem());
+    }
+
+    private int countFloorRepairItems(FriendTask task, Item item) {
+        return this.canUseForFloorRepair(task, item)
+                ? this.friend.countInventoryItems(stack -> stack.is(item))
+                : 0;
+    }
+
+    private boolean canUseForFloorRepair(FriendTask task, Item item) {
+        if (item == null || this.friend.countInventoryItems(stack -> stack.is(item)) <= 0) {
+            return false;
+        }
+        if (task == null || task.target() == null || task.target().isBlank()) {
+            return true;
+        }
+        return MiningTargetRegistry.find(task.target())
+                .map(target -> !target.inventoryMatcher().test(new ItemStack(item)))
+                .orElse(true);
     }
 
     boolean isCoalEquivalent(ItemStack stack) {
