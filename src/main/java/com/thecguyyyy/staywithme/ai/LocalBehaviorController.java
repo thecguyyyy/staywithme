@@ -302,6 +302,7 @@ public class LocalBehaviorController {
     private final PlayerEngineBlockSafetyRunner playerEngineBlockSafetyRunner;
     private final PlayerEngineRemoteTravelRunner playerEngineRemoteTravelRunner;
     private final PlayerEngineYLevelRunner playerEngineYLevelRunner;
+    private final PlayerEngineExploreRunner playerEngineExploreRunner;
     private static final Block[] VANILLA_COBBLESTONE_SOURCES = new Block[]{
             Blocks.STONE,
             Blocks.COBBLESTONE
@@ -450,6 +451,14 @@ public class LocalBehaviorController {
                 friend,
                 this.playerEngineTaskState,
                 this::resetPlayerEngineAcquisitionState,
+                this::sayThrottled
+        );
+        this.playerEngineExploreRunner = new PlayerEngineExploreRunner(
+                body,
+                friend,
+                this.playerEngineTaskState,
+                this::resetPlayerEngineAcquisitionState,
+                () -> this.exploreTarget = null,
                 this::sayThrottled
         );
     }
@@ -1552,15 +1561,7 @@ public class LocalBehaviorController {
             return;
         }
         int distance = Math.max(8, Math.min(256, task == null || task.amount() <= 0 ? 48 : task.amount()));
-        if (this.playerEngineTaskState.active() && this.body.hasExploreFinished(distance)) {
-            this.body.stop();
-            this.resetPlayerEngineAcquisitionState();
-            this.exploreTarget = null;
-            this.friend.getFriendBrain().completeTask();
-            return;
-        }
-        if (this.body.canUseHighLevelAcquisition() && this.body.explore(distance)) {
-            this.startPlayerEngineTask("explore", distance, "Using PlayerEngine to explore about " + distance + " blocks away.");
+        if (this.playerEngineExploreRunner.tryRun(distance)) {
             return;
         }
 
