@@ -303,6 +303,39 @@ final class LocalInventoryFallback {
                 && !this.shouldKeepForExpedition(stack, task);
     }
 
+    String expeditionSupplyStockSummary(Container chest) {
+        int torches = this.countContainerItems(chest, stack -> stack.is(Items.TORCH));
+        int food = this.countContainerItems(chest, this::isExpeditionFood);
+        int cookableFood = this.countContainerItems(chest, this::isCookableExpeditionFood);
+        int fuel = this.countContainerItems(chest, this::isSupplyFurnaceFuel);
+        int sticks = this.countContainerItems(chest, stack -> stack.is(Items.STICK));
+        int planks = this.countContainerItems(chest, stack -> stack.is(ItemTags.PLANKS));
+        int logs = this.countContainerItems(chest, stack -> stack.is(ItemTags.LOGS));
+        int pickaxes = this.countContainerItems(chest, stack -> stack.is(ItemTags.PICKAXES));
+        int craftingTables = this.countContainerItems(chest, stack -> stack.is(Items.CRAFTING_TABLE));
+        int furnaces = this.countContainerItems(chest, stack -> stack.is(Items.FURNACE) || stack.is(Items.BLAST_FURNACE));
+        return "torches="
+                + torches
+                + ",food="
+                + food
+                + ",cookableFood="
+                + cookableFood
+                + ",fuel="
+                + fuel
+                + ",sticks="
+                + sticks
+                + ",planks="
+                + planks
+                + ",logs="
+                + logs
+                + ",pickaxes="
+                + pickaxes
+                + ",tables="
+                + craftingTables
+                + ",furnaces="
+                + furnaces;
+    }
+
     boolean canContainerAccept(Container container, ItemStack stack) {
         if (container == null || stack.isEmpty()) {
             return false;
