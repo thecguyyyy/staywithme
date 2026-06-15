@@ -244,6 +244,65 @@ final class LocalInventoryFallback {
         return movedTotal;
     }
 
+    boolean shouldKeepForExpedition(ItemStack stack, FriendTask task) {
+        if (this.isExpeditionFood(stack)) {
+            return true;
+        }
+        if (stack.is(Items.TORCH)
+                || stack.is(Items.WOODEN_PICKAXE)
+                || stack.is(Items.STONE_PICKAXE)
+                || stack.is(Items.IRON_PICKAXE)
+                || stack.is(Items.DIAMOND_PICKAXE)
+                || stack.is(Items.NETHERITE_PICKAXE)
+                || stack.is(Items.WOODEN_AXE)
+                || stack.is(Items.STONE_AXE)
+                || stack.is(Items.IRON_AXE)
+                || stack.is(Items.DIAMOND_AXE)
+                || stack.is(Items.NETHERITE_AXE)
+                || stack.is(Items.WOODEN_SWORD)
+                || stack.is(Items.STONE_SWORD)
+                || stack.is(Items.IRON_SWORD)
+                || stack.is(Items.DIAMOND_SWORD)
+                || stack.is(Items.NETHERITE_SWORD)) {
+            return true;
+        }
+        if (task.target() != null) {
+            return MiningTargetRegistry.find(task.target())
+                    .map(target -> target.inventoryMatcher().test(stack))
+                    .orElse(false);
+        }
+        return false;
+    }
+
+    boolean hasStorableExpeditionOverflow(FriendTask task) {
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (this.isStorableExpeditionOverflow(stack, task)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    boolean canContainerAcceptStorableExpeditionOverflow(Container container, FriendTask task) {
+        if (container == null) {
+            return false;
+        }
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (this.isStorableExpeditionOverflow(stack, task) && this.canContainerAccept(container, stack)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    boolean isStorableExpeditionOverflow(ItemStack stack, FriendTask task) {
+        return !stack.isEmpty()
+                && !stack.is(Items.CHEST)
+                && !this.shouldKeepForExpedition(stack, task);
+    }
+
     boolean canContainerAccept(Container container, ItemStack stack) {
         if (container == null || stack.isEmpty()) {
             return false;

@@ -7564,61 +7564,19 @@ public class LocalBehaviorController {
     }
 
     private boolean shouldKeepForExpedition(ItemStack stack, FriendTask task) {
-        if (this.isExpeditionFood(stack)) {
-            return true;
-        }
-        if (stack.is(Items.TORCH)
-                || stack.is(Items.WOODEN_PICKAXE)
-                || stack.is(Items.STONE_PICKAXE)
-                || stack.is(Items.IRON_PICKAXE)
-                || stack.is(Items.DIAMOND_PICKAXE)
-                || stack.is(Items.NETHERITE_PICKAXE)
-                || stack.is(Items.WOODEN_AXE)
-                || stack.is(Items.STONE_AXE)
-                || stack.is(Items.IRON_AXE)
-                || stack.is(Items.DIAMOND_AXE)
-                || stack.is(Items.NETHERITE_AXE)
-                || stack.is(Items.WOODEN_SWORD)
-                || stack.is(Items.STONE_SWORD)
-                || stack.is(Items.IRON_SWORD)
-                || stack.is(Items.DIAMOND_SWORD)
-                || stack.is(Items.NETHERITE_SWORD)) {
-            return true;
-        }
-        if (task.target() != null) {
-            Optional<MiningTargetRegistry.MiningTarget> target = MiningTargetRegistry.find(task.target());
-            return target.isPresent() && target.get().inventoryMatcher().test(stack);
-        }
-        return false;
+        return this.inventoryFallback.shouldKeepForExpedition(stack, task);
     }
 
     private boolean hasStorableExpeditionOverflow(FriendTask task) {
-        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
-            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
-            if (this.isStorableExpeditionOverflow(stack, task)) {
-                return true;
-            }
-        }
-        return false;
+        return this.inventoryFallback.hasStorableExpeditionOverflow(task);
     }
 
     private boolean canContainerAcceptStorableExpeditionOverflow(Container container, FriendTask task) {
-        if (container == null) {
-            return false;
-        }
-        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
-            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
-            if (this.isStorableExpeditionOverflow(stack, task) && this.canContainerAccept(container, stack)) {
-                return true;
-            }
-        }
-        return false;
+        return this.inventoryFallback.canContainerAcceptStorableExpeditionOverflow(container, task);
     }
 
     private boolean isStorableExpeditionOverflow(ItemStack stack, FriendTask task) {
-        return !stack.isEmpty()
-                && !stack.is(Items.CHEST)
-                && !this.shouldKeepForExpedition(stack, task);
+        return this.inventoryFallback.isStorableExpeditionOverflow(stack, task);
     }
 
     private boolean canContainerAccept(Container container, ItemStack stack) {
