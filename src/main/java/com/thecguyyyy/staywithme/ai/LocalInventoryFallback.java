@@ -9,8 +9,10 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 final class LocalInventoryFallback {
+    private static final int EXPEDITION_MIN_PICKAXE_DURABILITY = 8;
     private final FriendEntity friend;
 
     LocalInventoryFallback(FriendEntity friend) {
@@ -170,6 +172,87 @@ final class LocalInventoryFallback {
             }
         }
         return empty;
+    }
+
+    boolean hasUsablePickaxeForRequirement(MiningTargetRegistry.ToolRequirement requirement) {
+        BlockState representative = switch (requirement) {
+            case NONE -> null;
+            case WOODEN_PICKAXE -> Blocks.STONE.defaultBlockState();
+            case STONE_PICKAXE -> Blocks.IRON_ORE.defaultBlockState();
+            case IRON_PICKAXE -> Blocks.DIAMOND_ORE.defaultBlockState();
+        };
+        if (representative == null) {
+            return true;
+        }
+        for (int slot = 0; slot < this.friend.getInventoryProvider().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getInventoryProvider().getItem(slot);
+            if (!stack.isEmpty()
+                    && stack.is(ItemTags.PICKAXES)
+                    && (!stack.isDamageableItem() || this.remainingDurability(stack) > 0)
+                    && stack.isCorrectToolForDrops(representative)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    boolean hasUsableExpeditionPickaxe(FriendTask task) {
+        return this.countUsableExpeditionPickaxes(task) > 0;
+    }
+
+    int countUsableExpeditionPickaxes(FriendTask task) {
+        return this.friend.countInventoryItems(stack -> this.isUsableExpeditionPickaxe(task, stack));
+    }
+
+    boolean isUsableExpeditionPickaxe(FriendTask task, ItemStack stack) {
+        if (!this.isUsableExpeditionPickaxe(stack)) {
+            return false;
+        }
+        if (task == null || task.target() == null || task.target().isBlank()) {
+            return true;
+        }
+        return MiningTargetRegistry.find(task.target())
+                .map(target -> this.canHarvestAnyTargetSource(stack, target.sourceBlocks()))
+                .orElse(true);
+    }
+
+    int bestExpeditionPickaxeDurability() {
+        int best = -1;
+        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
+            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
+            if (stack.isEmpty() || !stack.is(ItemTags.PICKAXES)) {
+                continue;
+            }
+            if (!stack.isDamageableItem()) {
+                return Integer.MAX_VALUE;
+            }
+            best = Math.max(best, this.remainingDurability(stack));
+        }
+        return best;
+    }
+
+    private boolean isUsableExpeditionPickaxe(ItemStack stack) {
+        if (stack.isEmpty() || !stack.is(ItemTags.PICKAXES)) {
+            return false;
+        }
+        return !stack.isDamageableItem() || this.remainingDurability(stack) > EXPEDITION_MIN_PICKAXE_DURABILITY;
+    }
+
+    private boolean canHarvestAnyTargetSource(ItemStack stack, Block... sourceBlocks) {
+        if (sourceBlocks.length == 0) {
+            return true;
+        }
+        for (Block block : sourceBlocks) {
+            BlockState state = block.defaultBlockState();
+            if (!state.requiresCorrectToolForDrops() || stack.isCorrectToolForDrops(state)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int remainingDurability(ItemStack stack) {
+        return Math.max(0, stack.getMaxDamage() - stack.getDamageValue());
     }
 
     private int countFloorRepairItems(FriendTask task, Item item) {

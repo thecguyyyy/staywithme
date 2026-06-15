@@ -85,7 +85,6 @@ public class LocalBehaviorController {
     private static final int TORCH_INTERVAL_STEPS = 8;
     private static final int EXPEDITION_LOW_TORCH_THRESHOLD = 2;
     private static final int EXPEDITION_RESTOCK_TORCH_TARGET = WorkflowFactory.EXPEDITION_TORCH_TARGET;
-    private static final int EXPEDITION_MIN_PICKAXE_DURABILITY = 8;
     private static final int EXPEDITION_RESTOCK_PICKAXE_TARGET = 2;
     private static final int EXPEDITION_TRAVEL_BREADCRUMB_LIMIT = 4096;
     private static final int EXPEDITION_LOW_FOOD_THRESHOLD = 8;
@@ -4243,25 +4242,7 @@ public class LocalBehaviorController {
     }
 
     private boolean hasUsablePickaxeForRequirement(MiningTargetRegistry.ToolRequirement requirement) {
-        BlockState representative = switch (requirement) {
-            case NONE -> null;
-            case WOODEN_PICKAXE -> Blocks.STONE.defaultBlockState();
-            case STONE_PICKAXE -> Blocks.IRON_ORE.defaultBlockState();
-            case IRON_PICKAXE -> Blocks.DIAMOND_ORE.defaultBlockState();
-        };
-        if (representative == null) {
-            return true;
-        }
-        for (int slot = 0; slot < this.friend.getInventoryProvider().getContainerSize(); slot++) {
-            ItemStack stack = this.friend.getInventoryProvider().getItem(slot);
-            if (!stack.isEmpty()
-                    && stack.is(ItemTags.PICKAXES)
-                    && (!stack.isDamageableItem() || this.remainingDurability(stack) > 0)
-                    && stack.isCorrectToolForDrops(representative)) {
-                return true;
-            }
-        }
-        return false;
+        return this.inventoryFallback.hasUsablePickaxeForRequirement(requirement);
     }
 
     private boolean scheduleCharcoalRecoveryIfCoalExplorationStalled(WorkStep step) {
@@ -7451,67 +7432,20 @@ public class LocalBehaviorController {
                 || this.canCraftSupplyFurnaceFromChest(level, chest);
     }
 
-    private boolean hasUsableExpeditionPickaxe() {
-        return this.friend.countInventoryItems(this::isUsableExpeditionPickaxe) > 0;
-    }
-
     private boolean hasUsableExpeditionPickaxe(FriendTask task) {
-        return this.countUsableExpeditionPickaxes(task) > 0;
+        return this.inventoryFallback.hasUsableExpeditionPickaxe(task);
     }
 
     private int countUsableExpeditionPickaxes(FriendTask task) {
-        return this.friend.countInventoryItems(stack -> this.isUsableExpeditionPickaxe(task, stack));
+        return this.inventoryFallback.countUsableExpeditionPickaxes(task);
     }
 
     private boolean isUsableExpeditionPickaxe(FriendTask task, ItemStack stack) {
-        if (!this.isUsableExpeditionPickaxe(stack)) {
-            return false;
-        }
-        if (task == null || task.target() == null || task.target().isBlank()) {
-            return true;
-        }
-        return MiningTargetRegistry.find(task.target())
-                .map(target -> this.canHarvestAnyTargetSource(stack, target.sourceBlocks()))
-                .orElse(true);
-    }
-
-    private boolean isUsableExpeditionPickaxe(ItemStack stack) {
-        if (stack.isEmpty() || !stack.is(ItemTags.PICKAXES)) {
-            return false;
-        }
-        return !stack.isDamageableItem() || this.remainingDurability(stack) > EXPEDITION_MIN_PICKAXE_DURABILITY;
-    }
-
-    private boolean canHarvestAnyTargetSource(ItemStack stack, Block... sourceBlocks) {
-        if (sourceBlocks.length == 0) {
-            return true;
-        }
-        for (Block block : sourceBlocks) {
-            BlockState state = block.defaultBlockState();
-            if (!state.requiresCorrectToolForDrops() || stack.isCorrectToolForDrops(state)) {
-                return true;
-            }
-        }
-        return false;
+        return this.inventoryFallback.isUsableExpeditionPickaxe(task, stack);
     }
 
     private int bestExpeditionPickaxeDurability() {
-        int best = -1;
-        for (int slot = 0; slot < this.friend.getFriendInventory().getContainerSize(); slot++) {
-            ItemStack stack = this.friend.getFriendInventory().getItem(slot);
-            if (stack.isEmpty() || !stack.is(ItemTags.PICKAXES)) {
-                continue;
-            }
-            if (!stack.isDamageableItem()) {
-                return Integer.MAX_VALUE;
-            }
-            best = Math.max(best, this.remainingDurability(stack));
-        }
-        return best;
-    }
-
-    private int remainingDurability(ItemStack stack) {
-        return Math.max(0, stack.getMaxDamage() - stack.getDamageValue());
+        return this.inventoryFallback.bestExpeditionPickaxeDurability();
     }
 
     private boolean eatCarriedFoodIfNeeded(FriendTask task) {
