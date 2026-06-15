@@ -294,6 +294,7 @@ public class LocalBehaviorController {
     private final PlayerEngineCollectionRunner playerEngineCollectionRunner;
     private final PlayerEngineSmeltingRunner playerEngineSmeltingRunner;
     private final PlayerEngineStartOnlyTaskRunner playerEngineStartOnlyTaskRunner;
+    private final PlayerEngineRoutineRunner playerEngineRoutineRunner;
     private final PlayerEngineConfirmedTaskRunner playerEngineConfirmedTaskRunner;
     private final PlayerEngineMovementRunner playerEngineMovementRunner;
     private final PlayerEngineFallbackTaskRunner playerEngineFallbackTaskRunner;
@@ -426,6 +427,11 @@ public class LocalBehaviorController {
                 this.playerEngineTaskState,
                 this::resetPlayerEngineAcquisitionState,
                 this::sayThrottled
+        );
+        this.playerEngineRoutineRunner = new PlayerEngineRoutineRunner(
+                body,
+                this.playerEngineStartOnlyTaskRunner,
+                this.playerEngineCountedTaskRunner
         );
         this.playerEngineConfirmedTaskRunner = new PlayerEngineConfirmedTaskRunner(
                 body,
@@ -1428,26 +1434,11 @@ public class LocalBehaviorController {
     }
 
     private void fish(FriendTask task) {
-        this.playerEngineStartOnlyTaskRunner.run(
-                "fish",
-                1,
-                this.body::fish,
-                "Fishing needs PlayerEngine right now; Forge fallback does not implement fishing.",
-                "PlayerEngine fishing did not start: ",
-                "Using PlayerEngine to fish. Stop me when you have enough."
-        );
+        this.playerEngineRoutineRunner.fish();
     }
 
     private void farm(FriendTask task) {
-        int range = Math.max(1, task == null || task.amount() <= 0 ? 10 : task.amount());
-        this.playerEngineStartOnlyTaskRunner.run(
-                "farm",
-                range,
-                () -> this.body.farm(range),
-                "Farming needs PlayerEngine right now; Forge fallback does not implement crop farming.",
-                "PlayerEngine farming did not start: ",
-                "Using PlayerEngine to farm nearby crops within range " + range + ". Stop me when you are done."
-        );
+        this.playerEngineRoutineRunner.farm(task);
     }
 
     private void explore(FriendTask task) {
@@ -1518,22 +1509,7 @@ public class LocalBehaviorController {
         if (!(this.friend.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        this.playerEngineCountedTaskRunner.run(
-                "sleep_through_night",
-                1,
-                () -> isDaytime(serverLevel),
-                this.body::hasSleepThroughNightFinished,
-                this.body::sleepThroughNight,
-                "Sleeping through night needs PlayerEngine right now; Forge fallback does not implement bed placement/sleeping.",
-                "PlayerEngine sleep finished, but it is still night.",
-                "PlayerEngine sleep did not start: ",
-                "Using PlayerEngine to sleep through the night."
-        );
-    }
-
-    private static boolean isDaytime(ServerLevel level) {
-        long time = level.getDayTime() % 24000L;
-        return time >= 0L && time < 13000L;
+        this.playerEngineRoutineRunner.sleepThroughNight(serverLevel);
     }
 
     private void getOutOfWater() {
