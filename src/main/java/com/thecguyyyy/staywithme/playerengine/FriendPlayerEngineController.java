@@ -7,6 +7,7 @@ import com.player2.playerengine.automaton.api.IBaritone;
 import com.player2.playerengine.automaton.api.pathing.goals.GoalBlock;
 import com.player2.playerengine.commands.DepositCommand;
 import com.player2.playerengine.player2api.Character;
+import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.player2.playerengine.tasks.ResourceTask;
 import com.player2.playerengine.tasks.construction.ClearLiquidTask;
 import com.player2.playerengine.tasks.construction.PlaceBlockTask;
@@ -1615,6 +1616,7 @@ public class FriendPlayerEngineController {
             Character companionCharacter = PlayerEngineCompanionCharacter.from(this.friend);
             this.controller = new PlayerEngineController(active, companionCharacter, PLAYER2_GAME_ID);
             this.friend.getOwnerPlayer().ifPresent(this.controller::setOwner);
+            ConversationManager.sendGreeting(this.controller, companionCharacter);
             StayWithMeMod.LOGGER.info(
                     "PlayerEngine TaskCatalogue controller initialized for companion {} as {}",
                     this.friend.getUUID(),
