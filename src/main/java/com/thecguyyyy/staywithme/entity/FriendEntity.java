@@ -13,6 +13,9 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Containers;
@@ -44,6 +47,7 @@ import java.util.function.Predicate;
 
 public class FriendEntity extends PathfinderMob {
     public static final int MAX_SAFE_FALL_DISTANCE = 6;
+    private static final EntityDataAccessor<String> DATA_COMPANION_SKIN_URL = SynchedEntityData.defineId(FriendEntity.class, EntityDataSerializers.STRING);
     private static final int INVENTORY_SIZE = 36;
     private static final int RECOVERED_TASK_OWNER_REMINDER_TICKS = 20 * 60;
 
@@ -87,6 +91,12 @@ public class FriendEntity extends PathfinderMob {
         this.goalSelector.addGoal(0, new FloatGoal(this));
         this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0F));
         this.goalSelector.addGoal(9, new RandomLookAroundGoal(this));
+    }
+
+    @Override
+    protected void defineSynchedData() {
+        super.defineSynchedData();
+        this.entityData.define(DATA_COMPANION_SKIN_URL, "");
     }
 
     @Override
@@ -193,6 +203,7 @@ public class FriendEntity extends PathfinderMob {
         if (tag.contains("CompanionProfile", Tag.TAG_COMPOUND)) {
             this.companionProfile = loadCompanionProfile(tag.getCompound("CompanionProfile"));
         }
+        this.syncCompanionProfileData();
         this.applyCompanionProfileName();
         if (tag.contains("FriendState")) {
             try {
@@ -304,6 +315,7 @@ public class FriendEntity extends PathfinderMob {
 
     public void setCompanionProfile(CompanionCharacterProfile profile) {
         this.companionProfile = profile == null ? CompanionCharacterProfile.empty() : profile;
+        this.syncCompanionProfileData();
         this.applyCompanionProfileName();
         this.setPersistenceRequired();
     }
@@ -314,6 +326,10 @@ public class FriendEntity extends PathfinderMob {
 
     public String getCompanionProfileKey() {
         return this.getCompanionProfile().key();
+    }
+
+    public String getCompanionSkinUrl() {
+        return this.entityData.get(DATA_COMPANION_SKIN_URL);
     }
 
     public boolean matchesCompanionProfile(CompanionCharacterProfile profile) {
@@ -526,6 +542,10 @@ public class FriendEntity extends PathfinderMob {
         if (profile.hasIdentity()) {
             this.setCustomName(Component.literal(profile.displayName()));
         }
+    }
+
+    private void syncCompanionProfileData() {
+        this.entityData.set(DATA_COMPANION_SKIN_URL, this.getCompanionProfile().skinUrl());
     }
 
     private static CompoundTag saveCompanionProfile(CompanionCharacterProfile profile) {
