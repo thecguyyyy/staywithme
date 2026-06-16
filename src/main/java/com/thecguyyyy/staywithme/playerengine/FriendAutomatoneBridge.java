@@ -71,9 +71,7 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
             EquipmentSlot equipmentSlot = EquipmentSlot.byTypeAndIndex(EquipmentSlot.Type.ARMOR, slot);
             this.livingInventory.armor.set(slot, this.friend.getItemBySlot(equipmentSlot).copy());
         }
-        for (int slot = 0; slot < this.livingInventory.offHand.size(); slot++) {
-            this.livingInventory.offHand.set(slot, ItemStack.EMPTY);
-        }
+        this.syncFromFriendOffhand();
         this.livingInventory.selectedSlot = this.friend.getInventoryProvider().getSelectedSlot();
         this.syncFromFriendHunger();
     }
@@ -96,6 +94,7 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
                 this.friend.setItemSlot(equipmentSlot, bridgeStack.copy());
             }
         }
+        this.syncToFriendOffhand();
         this.friend.getInventoryProvider().setSelectedSlot(this.livingInventory.selectedSlot);
         this.syncToFriendHunger();
     }
@@ -117,6 +116,25 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
         this.hungerManager.setFoodLevel(this.friend.getHungerProvider().getFoodLevel());
         this.hungerManager.setSaturationLevel(this.friend.getHungerProvider().getSaturationLevel());
         this.hungerManager.setExhaustion(this.friend.getHungerProvider().getExhaustion());
+    }
+
+    private void syncFromFriendOffhand() {
+        for (int slot = 0; slot < this.livingInventory.offHand.size(); slot++) {
+            this.livingInventory.offHand.set(slot, slot == 0
+                    ? this.friend.getItemBySlot(EquipmentSlot.OFFHAND).copy()
+                    : ItemStack.EMPTY);
+        }
+    }
+
+    private void syncToFriendOffhand() {
+        if (this.livingInventory.offHand.isEmpty()) {
+            return;
+        }
+        ItemStack bridgeStack = this.livingInventory.offHand.get(0);
+        ItemStack entityStack = this.friend.getItemBySlot(EquipmentSlot.OFFHAND);
+        if (!ItemStack.matches(entityStack, bridgeStack)) {
+            this.friend.setItemSlot(EquipmentSlot.OFFHAND, bridgeStack.copy());
+        }
     }
 
     private void syncToFriendHunger() {

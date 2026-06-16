@@ -104,13 +104,16 @@ public class FriendEntity extends PathfinderMob {
 
     @Override
     public Iterable<ItemStack> getHandSlots() {
-        return List.of(this.inventoryProvider.getMainHandStack(), ItemStack.EMPTY);
+        return List.of(this.inventoryProvider.getMainHandStack(), super.getItemBySlot(EquipmentSlot.OFFHAND));
     }
 
     @Override
     public ItemStack getItemBySlot(EquipmentSlot slot) {
         if (slot == EquipmentSlot.MAINHAND) {
             return this.inventoryProvider.getMainHandStack();
+        }
+        if (slot == EquipmentSlot.OFFHAND) {
+            return super.getItemBySlot(EquipmentSlot.OFFHAND);
         }
         return super.getItemBySlot(slot);
     }
@@ -119,6 +122,10 @@ public class FriendEntity extends PathfinderMob {
     public void setItemSlot(EquipmentSlot slot, ItemStack stack) {
         if (slot == EquipmentSlot.MAINHAND) {
             this.inventoryProvider.setMainHandStack(stack);
+            return;
+        }
+        if (slot == EquipmentSlot.OFFHAND) {
+            super.setItemSlot(EquipmentSlot.OFFHAND, stack);
             return;
         }
         super.setItemSlot(slot, stack);
