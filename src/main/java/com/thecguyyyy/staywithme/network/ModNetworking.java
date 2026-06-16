@@ -7,7 +7,7 @@ import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public final class ModNetworking {
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "2";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(StayWithMeMod.MOD_ID, "main"),
@@ -40,6 +40,11 @@ public final class ModNetworking {
                 .encoder(LlmConnectionTestPacket::encode)
                 .decoder(LlmConnectionTestPacket::decode)
                 .consumerMainThread(LlmConnectionTestPacket::handle)
+                .add();
+        CHANNEL.messageBuilder(CompanionCharacterActionPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(CompanionCharacterActionPacket::encode)
+                .decoder(CompanionCharacterActionPacket::decode)
+                .consumerMainThread(CompanionCharacterActionPacket::handle)
                 .add();
     }
 }

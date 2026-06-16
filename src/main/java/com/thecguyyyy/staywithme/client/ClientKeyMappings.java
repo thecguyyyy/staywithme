@@ -11,6 +11,12 @@ public final class ClientKeyMappings {
             GLFW.GLFW_KEY_O,
             "key.categories.staywithme"
     );
+    public static final KeyMapping OPEN_COMPANION_SCREEN = new KeyMapping(
+            "key.staywithme.open_companion_screen",
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_H,
+            "key.categories.staywithme"
+    );
 
     private ClientKeyMappings() {
     }

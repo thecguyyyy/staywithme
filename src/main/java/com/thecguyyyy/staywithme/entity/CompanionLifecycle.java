@@ -66,6 +66,14 @@ public final class CompanionLifecycle {
         return friend;
     }
 
+    public static Optional<FriendEntity> replaceCompanionFor(ServerPlayer player, boolean sessionManaged) {
+        if (player == null) {
+            return Optional.empty();
+        }
+        dismissNearestOwnedCompanion(player, EXISTING_COMPANION_SEARCH_RADIUS);
+        return Optional.ofNullable(spawnCompanionFor(player, sessionManaged));
+    }
+
     public static boolean dismissSessionCompanion(ServerPlayer player) {
         if (player == null) {
             return false;

@@ -24,6 +24,7 @@ public final class StayWithMeClientEvents {
         @SubscribeEvent
         public static void registerKeyMappings(RegisterKeyMappingsEvent event) {
             event.register(ClientKeyMappings.OPEN_LLM_CONFIG);
+            event.register(ClientKeyMappings.OPEN_COMPANION_SCREEN);
         }
     }
 
@@ -39,6 +40,9 @@ public final class StayWithMeClientEvents {
         while (ClientKeyMappings.OPEN_LLM_CONFIG.consumeClick()) {
             minecraft.setScreen(new StayWithMeLlmConfigScreen(minecraft.screen));
         }
+        while (ClientKeyMappings.OPEN_COMPANION_SCREEN.consumeClick()) {
+            minecraft.setScreen(new StayWithMeCompanionScreen(minecraft.screen));
+        }
     }
 
     @SubscribeEvent
@@ -50,5 +54,12 @@ public final class StayWithMeClientEvents {
                     return 1;
                 });
         event.getDispatcher().register(command);
+        LiteralArgumentBuilder<CommandSourceStack> companions = LiteralArgumentBuilder.<CommandSourceStack>literal("staywithmecompanions")
+                .executes(context -> {
+                    Minecraft minecraft = Minecraft.getInstance();
+                    minecraft.setScreen(new StayWithMeCompanionScreen(minecraft.screen));
+                    return 1;
+                });
+        event.getDispatcher().register(companions);
     }
 }

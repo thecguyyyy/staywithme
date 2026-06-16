@@ -62,7 +62,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 public class FriendPlayerEngineController {
-    private static final String PLAYER2_GAME_ID = "staywithme";
+    private static final String PLAYER2_GAME_ID = PlayerEngineGameId.ID;
 
     private final FriendEntity friend;
     private IBaritone baritone;

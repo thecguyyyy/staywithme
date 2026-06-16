@@ -9,11 +9,16 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 public class FriendMemory {
-    public int schemaVersion = 5;
+    public int schemaVersion = 6;
     public String playerUuid;
     public String playerName;
     public String companionId;
     public String companionName;
+    public String companionShortName;
+    public String companionGreetingInfo;
+    public String companionDescription;
+    public String companionSkinUrl;
+    public List<String> companionVoiceIds = new ArrayList<>();
     public long createdAtEpochMillis;
     public long updatedAtEpochMillis;
     public List<String> recentConversationSummaries = new ArrayList<>();
@@ -35,7 +40,7 @@ public class FriendMemory {
     }
 
     public void normalize(String fallbackPlayerUuid, String fallbackPlayerName) {
-        this.schemaVersion = Math.max(5, this.schemaVersion);
+        this.schemaVersion = Math.max(6, this.schemaVersion);
         if (this.playerUuid == null || this.playerUuid.isBlank()) {
             this.playerUuid = fallbackPlayerUuid;
         }
@@ -47,6 +52,21 @@ public class FriendMemory {
         }
         if (this.companionName == null || this.companionName.isBlank()) {
             this.companionName = "Companion";
+        }
+        if (this.companionShortName == null) {
+            this.companionShortName = "";
+        }
+        if (this.companionGreetingInfo == null) {
+            this.companionGreetingInfo = "";
+        }
+        if (this.companionDescription == null) {
+            this.companionDescription = "";
+        }
+        if (this.companionSkinUrl == null) {
+            this.companionSkinUrl = "";
+        }
+        if (this.companionVoiceIds == null) {
+            this.companionVoiceIds = new ArrayList<>();
         }
         if (this.createdAtEpochMillis <= 0L) {
             this.createdAtEpochMillis = System.currentTimeMillis();
@@ -181,7 +201,7 @@ public class FriendMemory {
         return builder.toString();
     }
 
-    private void touch() {
+    public void touch() {
         this.updatedAtEpochMillis = System.currentTimeMillis();
     }
 

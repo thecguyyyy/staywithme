@@ -21,17 +21,18 @@ final class PlayerEngineCompanionCharacter {
     private static Character fromOwnerMemory(ServerPlayer owner, Character fallback) {
         FriendMemory memory = JsonMemoryStore.load(owner.getUUID(), owner.getGameProfile().getName());
         String name = companionName(memory.companionName, fallback);
+        String shortName = companionShortName(memory.companionShortName, name);
         String ownerName = owner.getGameProfile().getName();
         return new Character(
                 characterId(memory.companionId, fallback),
                 name,
-                shortName(name),
-                "I am " + name + ", " + ownerName + "'s Minecraft companion.",
-                "You are " + name + ", an embodied Minecraft companion. Use PlayerEngine tasks to act in the world, follow "
+                shortName,
+                textOrDefault(memory.companionGreetingInfo, "I am " + name + ", " + ownerName + "'s Minecraft companion."),
+                textOrDefault(memory.companionDescription, "You are " + name + ", an embodied Minecraft companion. Use PlayerEngine tasks to act in the world, follow "
                         + ownerName
-                        + "'s instructions, and keep behavior grounded in vanilla survival rules.",
-                fallback.skinURL(),
-                fallback.voiceIds()
+                        + "'s instructions, and keep behavior grounded in vanilla survival rules."),
+                textOrDefault(memory.companionSkinUrl, fallback.skinURL()),
+                voiceIdsOrDefault(memory.companionVoiceIds, fallback.voiceIds())
         );
     }
 
@@ -40,7 +41,7 @@ final class PlayerEngineCompanionCharacter {
         return new Character(
                 characterId(friend.getUUID().toString(), fallback),
                 name,
-                shortName(name),
+                companionShortName("", name),
                 fallback.greetingInfo(),
                 fallback.description(),
                 fallback.skinURL(),
@@ -64,13 +65,32 @@ final class PlayerEngineCompanionCharacter {
         return limit(name, 32);
     }
 
-    private static String shortName(String name) {
+    private static String companionShortName(String rawShortName, String name) {
+        String configured = rawShortName == null ? "" : rawShortName.trim();
+        if (!configured.isBlank()) {
+            return limit(configured, 32);
+        }
         String trimmed = name == null ? "Companion" : name.trim();
         int firstSpace = trimmed.indexOf(' ');
         if (firstSpace > 0) {
             trimmed = trimmed.substring(0, firstSpace);
         }
         return limit(trimmed.isBlank() ? "Companion" : trimmed, 16);
+    }
+
+    private static String textOrDefault(String value, String fallback) {
+        String trimmed = value == null ? "" : value.trim();
+        return trimmed.isBlank() ? fallback : trimmed;
+    }
+
+    private static String[] voiceIdsOrDefault(java.util.List<String> values, String[] fallback) {
+        if (values == null || values.isEmpty()) {
+            return fallback;
+        }
+        return values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .toArray(String[]::new);
     }
 
     private static String limit(String value, int maxLength) {
