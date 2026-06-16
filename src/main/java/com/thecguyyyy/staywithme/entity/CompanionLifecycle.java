@@ -1,6 +1,8 @@
 package com.thecguyyyy.staywithme.entity;
 
 import com.thecguyyyy.staywithme.ai.FriendState;
+import com.thecguyyyy.staywithme.memory.FriendMemory;
+import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -28,12 +30,14 @@ public final class CompanionLifecycle {
 
         Optional<FriendEntity> sessionCompanion = resolveSessionCompanion(player);
         if (sessionCompanion.isPresent()) {
+            applyCompanionName(sessionCompanion.get(), player);
             moveNearPlayer(sessionCompanion.get(), player);
             return sessionCompanion;
         }
 
         Optional<FriendEntity> ownedCompanion = findNearestOwnedCompanion(player, EXISTING_COMPANION_SEARCH_RADIUS);
         if (ownedCompanion.isPresent()) {
+            applyCompanionName(ownedCompanion.get(), player);
             moveNearPlayer(ownedCompanion.get(), player);
             return ownedCompanion;
         }
@@ -52,7 +56,7 @@ public final class CompanionLifecycle {
         }
 
         moveNearPlayer(friend, player);
-        friend.setCustomName(Component.literal("Companion"));
+        applyCompanionName(friend, player);
         friend.setOwner(player);
         friend.setFriendState(FriendState.IDLE);
         level.addFreshEntity(friend);
@@ -130,5 +134,18 @@ public final class CompanionLifecycle {
     private static void moveNearPlayer(FriendEntity friend, ServerPlayer player) {
         Vec3 spawnPos = player.position().add(player.getLookAngle().normalize().scale(2.0D));
         friend.moveTo(spawnPos.x, player.getY(), spawnPos.z, player.getYRot(), 0.0F);
+    }
+
+    private static void applyCompanionName(FriendEntity friend, ServerPlayer player) {
+        friend.setCustomName(Component.literal(companionDisplayName(player)));
+    }
+
+    private static String companionDisplayName(ServerPlayer player) {
+        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
+        String name = memory.companionName == null ? "" : memory.companionName.trim();
+        if (name.isBlank()) {
+            return "Companion";
+        }
+        return name.length() > 32 ? name.substring(0, 32) : name;
     }
 }
