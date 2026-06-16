@@ -16,6 +16,8 @@ public final class StayWithMeConfig {
     public static final ForgeConfigSpec.BooleanValue USE_PLAYERENGINE_CONTROLLER;
     public static final ForgeConfigSpec.BooleanValue USE_SMARTBRAINLIB_BEHAVIORS;
     public static final ForgeConfigSpec.BooleanValue USE_BARITONE_WHEN_AVAILABLE;
+    public static final ForgeConfigSpec.BooleanValue AUTO_SUMMON_COMPANION;
+    public static final ForgeConfigSpec.BooleanValue DISMISS_AUTO_SUMMONED_COMPANIONS_ON_LOGOUT;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -39,6 +41,15 @@ public final class StayWithMeConfig {
         LLM_COOLDOWN_SECONDS = builder
                 .comment("Per-player cooldown between LLM requests. Cooldown hits fall back to local parsing.")
                 .defineInRange("cooldownSeconds", 5, 0, 300);
+        builder.pop();
+
+        builder.push("companion");
+        AUTO_SUMMON_COMPANION = builder
+                .comment("Player2NPC-style lifecycle: automatically ensure a companion exists near the player when they join.")
+                .define("autoSummonCompanion", true);
+        DISMISS_AUTO_SUMMONED_COMPANIONS_ON_LOGOUT = builder
+                .comment("Dismiss companions created by the automatic join lifecycle when the owner logs out. Manually spawned companions are not dismissed by this option.")
+                .define("dismissAutoSummonedCompanionsOnLogout", true);
         builder.pop();
 
         builder.push("integrations");

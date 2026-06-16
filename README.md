@@ -439,12 +439,14 @@ Reference model from Fabric Player2NPC:
 - player-like `LivingEntityInteractionManager`
 - guarded server tick for the controller
 - item pickup and equipment behavior close to a survival player
+- `CompanionManager`-style lifecycle that ensures companions near the player on join and dismisses assigned companions on disconnect
 
 Current Forge implementation:
 
 - PlayerEngine remains optional at runtime.
 - `FriendEntity` stays loadable without PlayerEngine.
 - When PlayerEngine is loaded, `FriendEntityFactory` reflects a `PlayerEngineFriendEntity` subclass that implements PlayerEngine inventory, interaction, and hunger provider interfaces.
+- `CompanionLifecycle` mirrors the thin Player2NPC lifecycle layer for Forge: when `companion.autoSummonCompanion` is enabled, player login ensures an owned companion exists near the player; when `companion.dismissAutoSummonedCompanionsOnLogout` is enabled, only companions created by that automatic session lifecycle are dismissed on logout. Manual `/staywithme spawn` companions remain persistent unless explicitly dismissed with `/staywithme dismiss` or `/staywithme despawn`.
 - `FriendPlayerEngineController` now creates a real `PlayerEngineController`, calls `TaskCatalogue.getItemTask(...)` for high-level acquisition, and wraps PlayerEngine tasks such as dropped item pickup, route building-material supply, furnace smelting, fuel collection, exploration, water/lava escape, coordinate liquid clearing, fire block extinguishing, item handoff, inventory deposit, armor equip, farming/fishing, single-hostile combat, hostile retreat, creeper-specific retreat, projectile dodging, projectile walling, and continuous HeroTask protection.
 - Movement/pathing/following/goto/returning/mining/acquisition/combat try PlayerEngine first when enabled, then fall back to Forge-native behavior.
 - PlayerEngine acquisition uses shared catalogue-name normalization for common user/LLM forms such as logs, sticks, ore blocks, raw mineral drops, lapis, quartz, and pickaxe aliases.

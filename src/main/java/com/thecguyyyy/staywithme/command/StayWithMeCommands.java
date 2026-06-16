@@ -13,8 +13,8 @@ import com.thecguyyyy.staywithme.ai.TaskPlanner;
 import com.thecguyyyy.staywithme.ai.mining.MiningTargetRegistry;
 import com.thecguyyyy.staywithme.config.StayWithMeConfig;
 import com.thecguyyyy.staywithme.crafting.RecipeCatalog;
+import com.thecguyyyy.staywithme.entity.CompanionLifecycle;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
-import com.thecguyyyy.staywithme.entity.ModEntities;
 import com.thecguyyyy.staywithme.integration.IntegrationStatus;
 import com.thecguyyyy.staywithme.llm.MiningExpeditionPlan;
 import com.thecguyyyy.staywithme.llm.MiningExpeditionPlanner;
@@ -35,7 +35,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.RegisterCommandsEvent;
 
 import java.io.IOException;
@@ -55,6 +54,8 @@ public final class StayWithMeCommands {
         event.getDispatcher().register(
                 Commands.literal("staywithme")
                         .then(Commands.literal("spawn").executes(StayWithMeCommands::spawn))
+                        .then(Commands.literal("dismiss").executes(StayWithMeCommands::dismiss))
+                        .then(Commands.literal("despawn").executes(StayWithMeCommands::dismiss))
                         .then(Commands.literal("follow").executes(StayWithMeCommands::follow))
                         .then(Commands.literal("goto")
                                 .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
@@ -270,22 +271,23 @@ public final class StayWithMeCommands {
 
     private static int spawn(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-        ServerLevel level = player.serverLevel();
-
-        FriendEntity friend = ModEntities.FRIEND.get().create(level);
+        FriendEntity friend = CompanionLifecycle.spawnCompanionFor(player, false);
         if (friend == null) {
             context.getSource().sendFailure(Component.literal("Could not create companion entity."));
             return 0;
         }
 
-        Vec3 spawnPos = player.position().add(player.getLookAngle().normalize().scale(2.0D));
-        friend.moveTo(spawnPos.x, player.getY(), spawnPos.z, player.getYRot(), 0.0F);
-        friend.setCustomName(Component.literal("Companion"));
-        friend.setOwner(player);
-        friend.setFriendState(FriendState.IDLE);
-        level.addFreshEntity(friend);
-
         context.getSource().sendSuccess(() -> Component.translatable("commands.staywithme.spawned"), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int dismiss(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        if (!CompanionLifecycle.dismissNearestOwnedCompanion(player, SEARCH_RADIUS)) {
+            context.getSource().sendFailure(Component.translatable("commands.staywithme.no_friend"));
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> Component.translatable("commands.staywithme.dismissed"), false);
         return Command.SINGLE_SUCCESS;
     }
 

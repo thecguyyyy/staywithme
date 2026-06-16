@@ -4,6 +4,8 @@
   "key.categories.staywithme": "Stay With Me",
   "key.staywithme.open_llm_config": "Open API Config",
   "commands.staywithme.spawned": "Companion spawned.",
+  "commands.staywithme.dismissed": "Companion dismissed.",
+  "commands.staywithme.companion_ready": "Companion ready.",
   "commands.staywithme.no_friend": "No nearby companion found.",
   "commands.staywithme.follow": "Companion is following you.",
   "commands.staywithme.stop": "Companion stopped.",

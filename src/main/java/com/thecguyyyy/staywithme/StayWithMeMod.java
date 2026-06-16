@@ -5,6 +5,7 @@ import com.thecguyyyy.staywithme.command.StayWithMeCommands;
 import com.thecguyyyy.staywithme.config.StayWithMeConfig;
 import com.thecguyyyy.staywithme.entity.ModEntities;
 import com.thecguyyyy.staywithme.event.StayWithMeChatEvents;
+import com.thecguyyyy.staywithme.event.StayWithMeLifecycleEvents;
 import com.thecguyyyy.staywithme.item.ModItems;
 import com.thecguyyyy.staywithme.network.ModNetworking;
 import net.minecraftforge.common.MinecraftForge;
@@ -30,5 +31,7 @@ public class StayWithMeMod {
 
         MinecraftForge.EVENT_BUS.addListener(StayWithMeCommands::register);
         MinecraftForge.EVENT_BUS.addListener(StayWithMeChatEvents::onServerChat);
+        MinecraftForge.EVENT_BUS.addListener(StayWithMeLifecycleEvents::onPlayerLoggedIn);
+        MinecraftForge.EVENT_BUS.addListener(StayWithMeLifecycleEvents::onPlayerLoggedOut);
     }
 }
