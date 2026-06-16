@@ -6,7 +6,7 @@ import com.player2.playerengine.automaton.api.BaritoneAPI;
 import com.player2.playerengine.automaton.api.IBaritone;
 import com.player2.playerengine.automaton.api.pathing.goals.GoalBlock;
 import com.player2.playerengine.commands.DepositCommand;
-import com.player2.playerengine.player2api.utils.CharacterUtils;
+import com.player2.playerengine.player2api.Character;
 import com.player2.playerengine.tasks.ResourceTask;
 import com.player2.playerengine.tasks.construction.ClearLiquidTask;
 import com.player2.playerengine.tasks.construction.PlaceBlockTask;
@@ -1612,11 +1612,13 @@ public class FriendPlayerEngineController {
         }
 
         try {
-            this.controller = new PlayerEngineController(active, CharacterUtils.DEFAULT_CHARACTER, PLAYER2_GAME_ID);
+            Character companionCharacter = PlayerEngineCompanionCharacter.from(this.friend);
+            this.controller = new PlayerEngineController(active, companionCharacter, PLAYER2_GAME_ID);
             this.friend.getOwnerPlayer().ifPresent(this.controller::setOwner);
             StayWithMeMod.LOGGER.info(
-                    "PlayerEngine TaskCatalogue controller initialized for companion {}",
-                    this.friend.getUUID()
+                    "PlayerEngine TaskCatalogue controller initialized for companion {} as {}",
+                    this.friend.getUUID(),
+                    companionCharacter.shortName()
             );
             return this.controller;
         } catch (RuntimeException | LinkageError error) {
