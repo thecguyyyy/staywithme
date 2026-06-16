@@ -2,6 +2,7 @@ package com.thecguyyyy.staywithme.network;
 
 import com.thecguyyyy.staywithme.entity.CompanionLifecycle;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
+import com.thecguyyyy.staywithme.memory.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.memory.FriendMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import net.minecraft.network.FriendlyByteBuf;
@@ -13,8 +14,6 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 public class CompanionCharacterActionPacket {
-    private static final int SEARCH_RADIUS = 128;
-
     private final Action action;
     private final CompanionCharacterProfile profile;
 
@@ -51,7 +50,7 @@ public class CompanionCharacterActionPacket {
             }
 
             if (packet.action == Action.DESPAWN) {
-                if (CompanionLifecycle.dismissNearestOwnedCompanion(player, SEARCH_RADIUS)) {
+                if (CompanionLifecycle.dismissCompanion(player, packet.profile)) {
                     player.sendSystemMessage(Component.translatable("commands.staywithme.dismissed"));
                 } else {
                     player.sendSystemMessage(Component.translatable("commands.staywithme.no_friend"));
@@ -63,7 +62,7 @@ public class CompanionCharacterActionPacket {
             packet.profile.applyTo(memory);
             JsonMemoryStore.save(memory);
 
-            Optional<FriendEntity> companion = CompanionLifecycle.replaceCompanionFor(player, true);
+            Optional<FriendEntity> companion = CompanionLifecycle.ensureCompanionFor(player, packet.profile, true);
             if (companion.isPresent()) {
                 player.sendSystemMessage(Component.literal("Companion selected: " + packet.profile.displayName()));
             } else {

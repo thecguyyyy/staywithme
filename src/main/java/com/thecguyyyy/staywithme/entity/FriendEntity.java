@@ -3,12 +3,14 @@ package com.thecguyyyy.staywithme.entity;
 import com.thecguyyyy.staywithme.ai.FriendBrain;
 import com.thecguyyyy.staywithme.ai.FriendState;
 import com.thecguyyyy.staywithme.ai.FriendTask;
+import com.thecguyyyy.staywithme.memory.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.perception.FriendPerception;
 import com.thecguyyyy.staywithme.playerengine.FriendHungerProvider;
 import com.thecguyyyy.staywithme.playerengine.FriendInteractionProvider;
 import com.thecguyyyy.staywithme.playerengine.FriendInventoryProvider;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -34,6 +36,7 @@ import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -55,6 +58,7 @@ public class FriendEntity extends PathfinderMob {
     private FriendTask currentTask;
     private FriendTask pendingRecoveredTask;
     private int pendingRecoveredTaskTicks;
+    private CompanionCharacterProfile companionProfile = CompanionCharacterProfile.empty();
 
     public FriendEntity(EntityType<? extends FriendEntity> entityType, Level level) {
         super(entityType, level);
@@ -164,6 +168,7 @@ public class FriendEntity extends PathfinderMob {
         if (this.ownerUuid != null) {
             tag.putUUID("Owner", this.ownerUuid);
         }
+        tag.put("CompanionProfile", saveCompanionProfile(this.companionProfile));
         tag.putString("FriendState", this.friendState.name());
         tag.putInt("SelectedItemSlot", this.inventoryProvider.getSelectedSlot());
         FriendTask taskToSave = this.currentTask != null ? this.currentTask : this.pendingRecoveredTask;
@@ -185,6 +190,10 @@ public class FriendEntity extends PathfinderMob {
         if (tag.hasUUID("Owner")) {
             this.ownerUuid = tag.getUUID("Owner");
         }
+        if (tag.contains("CompanionProfile", Tag.TAG_COMPOUND)) {
+            this.companionProfile = loadCompanionProfile(tag.getCompound("CompanionProfile"));
+        }
+        this.applyCompanionProfileName();
         if (tag.contains("FriendState")) {
             try {
                 this.friendState = FriendState.valueOf(tag.getString("FriendState"));
@@ -291,6 +300,35 @@ public class FriendEntity extends PathfinderMob {
 
     public boolean isOwnedBy(Player player) {
         return this.ownerUuid != null && this.ownerUuid.equals(player.getUUID());
+    }
+
+    public void setCompanionProfile(CompanionCharacterProfile profile) {
+        this.companionProfile = profile == null ? CompanionCharacterProfile.empty() : profile;
+        this.applyCompanionProfileName();
+        this.setPersistenceRequired();
+    }
+
+    public CompanionCharacterProfile getCompanionProfile() {
+        return this.companionProfile == null ? CompanionCharacterProfile.empty() : this.companionProfile;
+    }
+
+    public String getCompanionProfileKey() {
+        return this.getCompanionProfile().key();
+    }
+
+    public boolean matchesCompanionProfile(CompanionCharacterProfile profile) {
+        if (profile == null) {
+            return false;
+        }
+        CompanionCharacterProfile current = this.getCompanionProfile();
+        if (current.hasIdentity()) {
+            return current.key().equals(profile.key());
+        }
+        String currentName = this.getCustomName() == null ? "" : this.getCustomName().getString();
+        return !currentName.isBlank()
+                && (currentName.equalsIgnoreCase(profile.displayName())
+                || currentName.equalsIgnoreCase(profile.name())
+                || currentName.equalsIgnoreCase(profile.shortName()));
     }
 
     public Optional<ServerPlayer> getOwnerPlayer() {
@@ -481,5 +519,48 @@ public class FriendEntity extends PathfinderMob {
                 item.setItem(remainder);
             }
         }
+    }
+
+    private void applyCompanionProfileName() {
+        CompanionCharacterProfile profile = this.getCompanionProfile();
+        if (profile.hasIdentity()) {
+            this.setCustomName(Component.literal(profile.displayName()));
+        }
+    }
+
+    private static CompoundTag saveCompanionProfile(CompanionCharacterProfile profile) {
+        CompanionCharacterProfile safe = profile == null ? CompanionCharacterProfile.empty() : profile;
+        CompoundTag tag = new CompoundTag();
+        tag.putString("Id", safe.id());
+        tag.putString("Name", safe.name());
+        tag.putString("ShortName", safe.shortName());
+        tag.putString("GreetingInfo", safe.greetingInfo());
+        tag.putString("Description", safe.description());
+        tag.putString("SkinUrl", safe.skinUrl());
+        ListTag voices = new ListTag();
+        for (String voiceId : safe.voiceIds()) {
+            voices.add(StringTag.valueOf(voiceId));
+        }
+        tag.put("VoiceIds", voices);
+        return tag;
+    }
+
+    private static CompanionCharacterProfile loadCompanionProfile(CompoundTag tag) {
+        List<String> voiceIds = new ArrayList<>();
+        if (tag.contains("VoiceIds", Tag.TAG_LIST)) {
+            ListTag voices = tag.getList("VoiceIds", Tag.TAG_STRING);
+            for (int i = 0; i < voices.size(); i++) {
+                voiceIds.add(voices.getString(i));
+            }
+        }
+        return new CompanionCharacterProfile(
+                tag.getString("Id"),
+                tag.getString("Name"),
+                tag.getString("ShortName"),
+                tag.getString("GreetingInfo"),
+                tag.getString("Description"),
+                tag.getString("SkinUrl"),
+                voiceIds
+        );
     }
 }

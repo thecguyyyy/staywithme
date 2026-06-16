@@ -1,6 +1,7 @@
 package com.thecguyyyy.staywithme.entity;
 
 import com.thecguyyyy.staywithme.ai.FriendState;
+import com.thecguyyyy.staywithme.memory.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.memory.FriendMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import net.minecraft.network.chat.Component;
@@ -11,44 +12,69 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 public final class CompanionLifecycle {
     private static final int EXISTING_COMPANION_SEARCH_RADIUS = 128;
-    private static final ConcurrentMap<UUID, UUID> SESSION_COMPANIONS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<UUID, ConcurrentMap<String, UUID>> SESSION_COMPANIONS = new ConcurrentHashMap<>();
 
     private CompanionLifecycle() {
     }
 
     public static Optional<FriendEntity> ensureCompanionFor(ServerPlayer player) {
+        return ensureCompanionFor(player, profileFromMemory(player), true);
+    }
+
+    public static Optional<FriendEntity> ensureCompanionFor(
+            ServerPlayer player,
+            CompanionCharacterProfile profile,
+            boolean sessionManaged
+    ) {
         if (player == null) {
             return Optional.empty();
         }
+        CompanionCharacterProfile safeProfile = safeProfile(player, profile);
+        String profileKey = safeProfile.key();
 
-        Optional<FriendEntity> sessionCompanion = resolveSessionCompanion(player);
+        Optional<FriendEntity> sessionCompanion = resolveSessionCompanion(player, profileKey);
         if (sessionCompanion.isPresent()) {
-            applyCompanionName(sessionCompanion.get(), player);
+            applyCompanionProfile(sessionCompanion.get(), safeProfile);
             moveNearPlayer(sessionCompanion.get(), player);
             return sessionCompanion;
         }
 
-        Optional<FriendEntity> ownedCompanion = findNearestOwnedCompanion(player, EXISTING_COMPANION_SEARCH_RADIUS);
+        Optional<FriendEntity> ownedCompanion = findNearestOwnedCompanion(player, safeProfile, EXISTING_COMPANION_SEARCH_RADIUS);
         if (ownedCompanion.isPresent()) {
-            applyCompanionName(ownedCompanion.get(), player);
+            applyCompanionProfile(ownedCompanion.get(), safeProfile);
             moveNearPlayer(ownedCompanion.get(), player);
+            if (sessionManaged) {
+                sessionCompanionsFor(player).put(profileKey, ownedCompanion.get().getUUID());
+            }
             return ownedCompanion;
         }
 
-        return Optional.ofNullable(spawnCompanionFor(player, true));
+        return Optional.ofNullable(spawnCompanionFor(player, safeProfile, sessionManaged));
     }
 
     public static FriendEntity spawnCompanionFor(ServerPlayer player, boolean sessionManaged) {
+        return spawnCompanionFor(player, profileFromMemory(player), sessionManaged);
+    }
+
+    public static FriendEntity spawnCompanionFor(
+            ServerPlayer player,
+            CompanionCharacterProfile profile,
+            boolean sessionManaged
+    ) {
         if (player == null) {
             return null;
         }
+        CompanionCharacterProfile safeProfile = safeProfile(player, profile);
         ServerLevel level = player.serverLevel();
         FriendEntity friend = ModEntities.FRIEND.get().create(level);
         if (friend == null) {
@@ -56,12 +82,12 @@ public final class CompanionLifecycle {
         }
 
         moveNearPlayer(friend, player);
-        applyCompanionName(friend, player);
+        applyCompanionProfile(friend, safeProfile);
         friend.setOwner(player);
         friend.setFriendState(FriendState.IDLE);
         level.addFreshEntity(friend);
         if (sessionManaged) {
-            SESSION_COMPANIONS.put(player.getUUID(), friend.getUUID());
+            sessionCompanionsFor(player).put(safeProfile.key(), friend.getUUID());
         }
         return friend;
     }
@@ -70,19 +96,75 @@ public final class CompanionLifecycle {
         if (player == null) {
             return Optional.empty();
         }
-        dismissNearestOwnedCompanion(player, EXISTING_COMPANION_SEARCH_RADIUS);
-        return Optional.ofNullable(spawnCompanionFor(player, sessionManaged));
+        CompanionCharacterProfile profile = profileFromMemory(player);
+        dismissCompanion(player, profile);
+        return Optional.ofNullable(spawnCompanionFor(player, profile, sessionManaged));
     }
 
     public static boolean dismissSessionCompanion(ServerPlayer player) {
         if (player == null) {
             return false;
         }
-        UUID companionId = SESSION_COMPANIONS.remove(player.getUUID());
-        if (companionId == null) {
+        ConcurrentMap<String, UUID> companions = SESSION_COMPANIONS.remove(player.getUUID());
+        if (companions == null || companions.isEmpty()) {
             return false;
         }
-        return dismissCompanion(player.getServer(), companionId);
+        boolean dismissed = false;
+        for (UUID companionId : companions.values()) {
+            dismissed |= dismissCompanion(player.getServer(), companionId);
+        }
+        return dismissed;
+    }
+
+    public static void syncSessionCompanionsFor(ServerPlayer player, List<CompanionCharacterProfile> profiles) {
+        if (player == null || profiles == null || profiles.isEmpty()) {
+            return;
+        }
+        Set<String> assignedKeys = new HashSet<>();
+        for (CompanionCharacterProfile profile : profiles) {
+            if (profile != null && profile.hasIdentity()) {
+                assignedKeys.add(profile.key());
+            }
+        }
+        if (assignedKeys.isEmpty()) {
+            return;
+        }
+
+        ConcurrentMap<String, UUID> companions = sessionCompanionsFor(player);
+        companions.forEach((key, uuid) -> {
+            if (!assignedKeys.contains(key)) {
+                dismissCompanion(player.getServer(), uuid);
+                companions.remove(key, uuid);
+            }
+        });
+
+        for (CompanionCharacterProfile profile : profiles) {
+            if (profile != null && profile.hasIdentity()) {
+                ensureCompanionFor(player, profile, true);
+            }
+        }
+    }
+
+    public static boolean dismissCompanion(ServerPlayer player, CompanionCharacterProfile profile) {
+        if (player == null) {
+            return false;
+        }
+        CompanionCharacterProfile safeProfile = safeProfile(player, profile);
+        ConcurrentMap<String, UUID> companions = SESSION_COMPANIONS.get(player.getUUID());
+        UUID sessionUuid = companions == null ? null : companions.remove(safeProfile.key());
+        if (dismissCompanion(player.getServer(), sessionUuid)) {
+            return true;
+        }
+
+        Optional<FriendEntity> ownedCompanion = findNearestOwnedCompanion(player, safeProfile, EXISTING_COMPANION_SEARCH_RADIUS);
+        if (ownedCompanion.isEmpty()) {
+            return false;
+        }
+        FriendEntity friend = ownedCompanion.get();
+        removeSessionCompanion(friend.getUUID());
+        friend.stopTask();
+        friend.discard();
+        return true;
     }
 
     public static boolean dismissNearestOwnedCompanion(ServerPlayer player, int radius) {
@@ -91,7 +173,7 @@ public final class CompanionLifecycle {
             return false;
         }
         FriendEntity friend = companion.get();
-        SESSION_COMPANIONS.values().removeIf(uuid -> uuid.equals(friend.getUUID()));
+        removeSessionCompanion(friend.getUUID());
         friend.stopTask();
         friend.discard();
         return true;
@@ -111,16 +193,41 @@ public final class CompanionLifecycle {
                 .min(Comparator.comparingDouble(friend -> friend.distanceToSqr(player)));
     }
 
-    private static Optional<FriendEntity> resolveSessionCompanion(ServerPlayer player) {
-        UUID companionId = SESSION_COMPANIONS.get(player.getUUID());
+    public static Optional<FriendEntity> findNearestOwnedCompanion(
+            ServerPlayer player,
+            CompanionCharacterProfile profile,
+            int radius
+    ) {
+        if (player == null) {
+            return Optional.empty();
+        }
+        CompanionCharacterProfile safeProfile = safeProfile(player, profile);
+        return player.serverLevel()
+                .getEntitiesOfClass(
+                        FriendEntity.class,
+                        player.getBoundingBox().inflate(Math.max(1, radius)),
+                        friend -> friend.isAlive()
+                                && friend.isOwnedBy(player)
+                                && friend.matchesCompanionProfile(safeProfile)
+                )
+                .stream()
+                .min(Comparator.comparingDouble(friend -> friend.distanceToSqr(player)));
+    }
+
+    private static Optional<FriendEntity> resolveSessionCompanion(ServerPlayer player, String profileKey) {
+        ConcurrentMap<String, UUID> companions = SESSION_COMPANIONS.get(player.getUUID());
+        UUID companionId = companions == null ? null : companions.get(profileKey);
         if (companionId == null) {
             return Optional.empty();
         }
         Entity entity = player.serverLevel().getEntity(companionId);
-        if (entity instanceof FriendEntity friend && friend.isAlive() && friend.isOwnedBy(player)) {
+        if (entity instanceof FriendEntity friend
+                && friend.isAlive()
+                && friend.isOwnedBy(player)
+                && friend.getCompanionProfileKey().equals(profileKey)) {
             return Optional.of(friend);
         }
-        SESSION_COMPANIONS.remove(player.getUUID(), companionId);
+        companions.remove(profileKey, companionId);
         return Optional.empty();
     }
 
@@ -144,16 +251,34 @@ public final class CompanionLifecycle {
         friend.moveTo(spawnPos.x, player.getY(), spawnPos.z, player.getYRot(), 0.0F);
     }
 
-    private static void applyCompanionName(FriendEntity friend, ServerPlayer player) {
-        friend.setCustomName(Component.literal(companionDisplayName(player)));
+    private static void applyCompanionProfile(FriendEntity friend, CompanionCharacterProfile profile) {
+        friend.setCompanionProfile(profile);
+        friend.setCustomName(Component.literal(profile.displayName()));
     }
 
-    private static String companionDisplayName(ServerPlayer player) {
-        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
-        String name = memory.companionName == null ? "" : memory.companionName.trim();
-        if (name.isBlank()) {
-            return "Companion";
+    private static CompanionCharacterProfile profileFromMemory(ServerPlayer player) {
+        if (player == null) {
+            return CompanionCharacterProfile.empty();
         }
-        return name.length() > 32 ? name.substring(0, 32) : name;
+        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
+        return CompanionCharacterProfile.fromMemory(memory);
+    }
+
+    private static CompanionCharacterProfile safeProfile(ServerPlayer player, CompanionCharacterProfile profile) {
+        if (profile != null && profile.hasIdentity()) {
+            return profile;
+        }
+        return profileFromMemory(player);
+    }
+
+    private static ConcurrentMap<String, UUID> sessionCompanionsFor(ServerPlayer player) {
+        return SESSION_COMPANIONS.computeIfAbsent(player.getUUID(), ignored -> new ConcurrentHashMap<>());
+    }
+
+    private static void removeSessionCompanion(UUID companionUuid) {
+        if (companionUuid == null) {
+            return;
+        }
+        SESSION_COMPANIONS.values().forEach(map -> map.values().removeIf(uuid -> uuid.equals(companionUuid)));
     }
 }

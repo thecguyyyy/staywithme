@@ -1,10 +1,10 @@
-package com.thecguyyyy.staywithme.network;
+package com.thecguyyyy.staywithme.memory;
 
-import com.thecguyyyy.staywithme.memory.FriendMemory;
 import net.minecraft.network.FriendlyByteBuf;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public record CompanionCharacterProfile(
         String id,
@@ -25,6 +25,21 @@ public record CompanionCharacterProfile(
         description = clean(description, 2048);
         skinUrl = clean(skinUrl, 2048);
         voiceIds = cleanVoiceIds(voiceIds);
+    }
+
+    public static CompanionCharacterProfile fromMemory(FriendMemory memory) {
+        if (memory == null) {
+            return empty();
+        }
+        return new CompanionCharacterProfile(
+                memory.companionId,
+                memory.companionName,
+                memory.companionShortName,
+                memory.companionGreetingInfo,
+                memory.companionDescription,
+                memory.companionSkinUrl,
+                memory.companionVoiceIds
+        );
     }
 
     public static void encode(CompanionCharacterProfile profile, FriendlyByteBuf buffer) {
@@ -60,7 +75,7 @@ public record CompanionCharacterProfile(
     }
 
     public static CompanionCharacterProfile empty() {
-        return new CompanionCharacterProfile("", "Companion", "Companion", "", "", "", List.of());
+        return new CompanionCharacterProfile("", "", "", "", "", "", List.of());
     }
 
     public String displayName() {
@@ -71,6 +86,18 @@ public record CompanionCharacterProfile(
             return this.name;
         }
         return "Companion";
+    }
+
+    public String key() {
+        String value = !this.id.isBlank() ? this.id : this.name;
+        if (value == null || value.isBlank()) {
+            value = this.displayName();
+        }
+        return clean(value, 64).toLowerCase(Locale.ROOT);
+    }
+
+    public boolean hasIdentity() {
+        return !this.id.isBlank() || !this.name.isBlank() || !this.shortName.isBlank();
     }
 
     public void applyTo(FriendMemory memory) {

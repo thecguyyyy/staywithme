@@ -1,8 +1,8 @@
 package com.thecguyyyy.staywithme.client;
 
+import com.thecguyyyy.staywithme.memory.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.integration.IntegrationStatus;
 import com.thecguyyyy.staywithme.network.CompanionCharacterActionPacket;
-import com.thecguyyyy.staywithme.network.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.network.ModNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;

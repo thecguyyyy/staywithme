@@ -3,6 +3,7 @@ package com.thecguyyyy.staywithme.playerengine;
 import com.player2.playerengine.player2api.Character;
 import com.player2.playerengine.player2api.utils.CharacterUtils;
 import com.thecguyyyy.staywithme.entity.FriendEntity;
+import com.thecguyyyy.staywithme.memory.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.memory.FriendMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
 import net.minecraft.server.level.ServerPlayer;
@@ -13,6 +14,13 @@ final class PlayerEngineCompanionCharacter {
 
     static Character from(FriendEntity friend) {
         Character fallback = CharacterUtils.DEFAULT_CHARACTER;
+        CompanionCharacterProfile entityProfile = friend.getCompanionProfile();
+        if (entityProfile.hasIdentity()) {
+            String ownerName = friend.getOwnerPlayer()
+                    .map(owner -> owner.getGameProfile().getName())
+                    .orElse("the player");
+            return fromProfile(entityProfile, ownerName, fallback, friend.getUUID().toString());
+        }
         return friend.getOwnerPlayer()
                 .map(owner -> fromOwnerMemory(owner, fallback))
                 .orElseGet(() -> fromEntityName(friend, fallback));
@@ -20,19 +28,27 @@ final class PlayerEngineCompanionCharacter {
 
     private static Character fromOwnerMemory(ServerPlayer owner, Character fallback) {
         FriendMemory memory = JsonMemoryStore.load(owner.getUUID(), owner.getGameProfile().getName());
-        String name = companionName(memory.companionName, fallback);
-        String shortName = companionShortName(memory.companionShortName, name);
-        String ownerName = owner.getGameProfile().getName();
+        return fromProfile(CompanionCharacterProfile.fromMemory(memory), owner.getGameProfile().getName(), fallback, memory.companionId);
+    }
+
+    private static Character fromProfile(
+            CompanionCharacterProfile profile,
+            String ownerName,
+            Character fallback,
+            String fallbackId
+    ) {
+        String name = companionName(profile.name(), fallback);
+        String shortName = companionShortName(profile.shortName(), name);
         return new Character(
-                characterId(memory.companionId, fallback),
+                characterId(textOrDefault(profile.id(), fallbackId), fallback),
                 name,
                 shortName,
-                textOrDefault(memory.companionGreetingInfo, "I am " + name + ", " + ownerName + "'s Minecraft companion."),
-                textOrDefault(memory.companionDescription, "You are " + name + ", an embodied Minecraft companion. Use PlayerEngine tasks to act in the world, follow "
+                textOrDefault(profile.greetingInfo(), "I am " + name + ", " + ownerName + "'s Minecraft companion."),
+                textOrDefault(profile.description(), "You are " + name + ", an embodied Minecraft companion. Use PlayerEngine tasks to act in the world, follow "
                         + ownerName
                         + "'s instructions, and keep behavior grounded in vanilla survival rules."),
-                textOrDefault(memory.companionSkinUrl, fallback.skinURL()),
-                voiceIdsOrDefault(memory.companionVoiceIds, fallback.voiceIds())
+                textOrDefault(profile.skinUrl(), fallback.skinURL()),
+                voiceIdsOrDefault(profile.voiceIds(), fallback.voiceIds())
         );
     }
 
