@@ -542,14 +542,18 @@ public class FriendEntity extends PathfinderMob {
 
         AABB pickupArea = this.getBoundingBox().inflate(3.0D);
         List<ItemEntity> items = this.level().getEntitiesOfClass(ItemEntity.class, pickupArea,
-                item -> item.isAlive() && !item.getItem().isEmpty());
+                item -> item.isAlive() && !item.getItem().isEmpty() && !item.hasPickUpDelay());
 
         for (ItemEntity item : items) {
+            if (item.hasPickUpDelay()) {
+                continue;
+            }
             ItemStack stack = item.getItem();
             ItemStack remainder = this.insertIntoInventory(stack);
             if (remainder.getCount() == stack.getCount()) {
                 continue;
             }
+            this.take(item, stack.getCount() - remainder.getCount());
             if (remainder.isEmpty()) {
                 item.discard();
             } else {
