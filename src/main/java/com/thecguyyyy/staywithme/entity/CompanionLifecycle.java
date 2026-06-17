@@ -4,13 +4,15 @@ import com.thecguyyyy.staywithme.ai.FriendState;
 import com.thecguyyyy.staywithme.memory.CompanionCharacterProfile;
 import com.thecguyyyy.staywithme.memory.FriendMemory;
 import com.thecguyyyy.staywithme.memory.JsonMemoryStore;
+import com.thecguyyyy.staywithme.perception.FriendPerception;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -22,6 +24,8 @@ import java.util.concurrent.ConcurrentMap;
 
 public final class CompanionLifecycle {
     private static final int EXISTING_COMPANION_SEARCH_RADIUS = 128;
+    private static final int NEARBY_SPAWN_SEARCH_RADIUS = 2;
+    private static final int[] NEARBY_SPAWN_Y_OFFSETS = {0, 1, -1};
     private static final ConcurrentMap<UUID, ConcurrentMap<String, UUID>> SESSION_COMPANIONS = new ConcurrentHashMap<>();
 
     private CompanionLifecycle() {
@@ -247,8 +251,43 @@ public final class CompanionLifecycle {
     }
 
     private static void moveNearPlayer(FriendEntity friend, ServerPlayer player) {
-        Vec3 spawnPos = player.position().add(player.getLookAngle().normalize().scale(2.0D));
-        friend.moveTo(spawnPos.x, player.getY(), spawnPos.z, player.getYRot(), 0.0F);
+        BlockPos spawnPos = findNearbyCompanionStandPosition(player)
+                .orElseGet(() -> player.blockPosition().offset(
+                        player.getRandom().nextInt(3) - 1,
+                        1,
+                        player.getRandom().nextInt(3) - 1
+                ));
+        friend.moveTo(spawnPos.getX() + 0.5D, spawnPos.getY(), spawnPos.getZ() + 0.5D, player.getYRot(), 0.0F);
+        friend.setDeltaMovement(0.0D, 0.0D, 0.0D);
+    }
+
+    private static Optional<BlockPos> findNearbyCompanionStandPosition(ServerPlayer player) {
+        ServerLevel level = player.serverLevel();
+        BlockPos origin = player.blockPosition();
+        List<BlockPos> candidates = new ArrayList<>();
+        for (int radius = 1; radius <= NEARBY_SPAWN_SEARCH_RADIUS; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (dx == 0 && dz == 0) {
+                        continue;
+                    }
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) {
+                        continue;
+                    }
+                    for (int yOffset : NEARBY_SPAWN_Y_OFFSETS) {
+                        candidates.add(origin.offset(dx, yOffset, dz));
+                    }
+                }
+            }
+        }
+
+        while (!candidates.isEmpty()) {
+            BlockPos candidate = candidates.remove(player.getRandom().nextInt(candidates.size()));
+            if (FriendPerception.canStandAt(level, candidate)) {
+                return Optional.of(candidate);
+            }
+        }
+        return Optional.empty();
     }
 
     private static void applyCompanionProfile(FriendEntity friend, CompanionCharacterProfile profile) {
