@@ -1,7 +1,9 @@
 package com.thecguyyyy.staywithme.client;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.thecguyyyy.staywithme.StayWithMeMod;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.texture.HttpTexture;
 import net.minecraft.client.resources.DefaultPlayerSkin;
 import net.minecraft.resources.ResourceLocation;
@@ -15,13 +17,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class CompanionSkinTextures {
+    private static final UUID DEFAULT_FALLBACK_UUID = new UUID(0L, 0L);
     private static final Set<String> REGISTERED_URLS = ConcurrentHashMap.newKeySet();
 
     private CompanionSkinTextures() {
     }
 
     public static ResourceLocation textureFor(UUID entityUuid, String skinUrl) {
-        ResourceLocation fallback = DefaultPlayerSkin.getDefaultSkin(entityUuid);
+        UUID fallbackUuid = entityUuid == null ? DEFAULT_FALLBACK_UUID : entityUuid;
+        ResourceLocation fallback = DefaultPlayerSkin.getDefaultSkin(fallbackUuid);
         String normalizedUrl = normalizeUrl(skinUrl);
         if (normalizedUrl.isBlank()) {
             return fallback;
@@ -47,6 +51,14 @@ public final class CompanionSkinTextures {
             StayWithMeMod.LOGGER.warn("Failed to register companion skin texture {}", normalizedUrl, exception);
             return fallback;
         }
+    }
+
+    public static void renderHead(GuiGraphics graphics, int x, int y, int size, ResourceLocation skinTexture) {
+        graphics.blit(skinTexture, x, y, size, size, 8.0F, 8.0F, 8, 8, 64, 64);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        graphics.blit(skinTexture, x, y, size, size, 40.0F, 8.0F, 8, 8, 64, 64);
+        RenderSystem.disableBlend();
     }
 
     private static String normalizeUrl(String skinUrl) {

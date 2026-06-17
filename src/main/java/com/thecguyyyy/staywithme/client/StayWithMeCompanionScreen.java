@@ -9,6 +9,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
 
 import java.util.ArrayList;
@@ -72,8 +73,16 @@ public class StayWithMeCompanionScreen extends Screen {
         if (selected != null) {
             int detailX = left + panelWidth / 2 + 12;
             int detailWidth = panelWidth / 2 - 12;
-            graphics.drawString(this.font, selected.displayName(), detailX, 66, 0xFFFFFF);
-            int y = 84;
+            int headSize = Math.min(64, Math.max(40, detailWidth / 3));
+            int headY = 64;
+            ResourceLocation skinTexture = CompanionSkinTextures.textureFor(null, selected.skinUrl());
+            CompanionSkinTextures.renderHead(graphics, detailX, headY, headSize, skinTexture);
+
+            int titleX = detailX + headSize + 12;
+            int titleWidth = Math.max(80, detailWidth - headSize - 12);
+            graphics.drawString(this.font, this.font.plainSubstrByWidth(selected.displayName(), titleWidth), titleX, 66, 0xFFFFFF);
+
+            int y = headY + headSize + 12;
             String description = selected.description().isBlank() ? selected.name() : selected.description();
             for (FormattedCharSequence line : this.font.split(Component.literal(description), detailWidth)) {
                 graphics.drawString(this.font, line, detailX, y, 0xA0A0A0);
