@@ -110,6 +110,15 @@ public class FriendEntity extends PathfinderMob {
     }
 
     @Override
+    public Component getDisplayName() {
+        CompanionCharacterProfile profile = this.getCompanionProfile();
+        if (profile.hasIdentity()) {
+            return Component.literal(profile.displayName());
+        }
+        return super.getDisplayName();
+    }
+
+    @Override
     public void tick() {
         super.tick();
         if (!this.level().isClientSide) {
