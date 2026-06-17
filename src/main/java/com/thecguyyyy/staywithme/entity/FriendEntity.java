@@ -47,6 +47,8 @@ import java.util.function.Predicate;
 
 public class FriendEntity extends PathfinderMob {
     public static final int MAX_SAFE_FALL_DISTANCE = 6;
+    private static final float PLAYER2NPC_STEP_HEIGHT = 0.6F;
+    private static final double PLAYER2NPC_MOVEMENT_SPEED = 0.4D;
     private static final EntityDataAccessor<String> DATA_COMPANION_SKIN_URL = SynchedEntityData.defineId(FriendEntity.class, EntityDataSerializers.STRING);
     private static final EntityDataAccessor<ItemStack> DATA_MAIN_HAND_STACK = SynchedEntityData.defineId(FriendEntity.class, EntityDataSerializers.ITEM_STACK);
     private static final int INVENTORY_SIZE = 36;
@@ -72,6 +74,7 @@ public class FriendEntity extends PathfinderMob {
         this.hungerProvider = new FriendHungerProvider();
         this.perception = new FriendPerception(this);
         this.friendBrain = new FriendBrain(this);
+        this.setMaxUpStep(PLAYER2NPC_STEP_HEIGHT);
         this.getNavigation().setCanFloat(true);
         this.setPathfindingMalus(BlockPathTypes.WATER, 0.0F);
         this.setPathfindingMalus(BlockPathTypes.WATER_BORDER, 0.0F);
@@ -82,7 +85,7 @@ public class FriendEntity extends PathfinderMob {
     public static AttributeSupplier.Builder createAttributes() {
         return PathfinderMob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0D)
-                .add(Attributes.MOVEMENT_SPEED, 0.30D)
+                .add(Attributes.MOVEMENT_SPEED, PLAYER2NPC_MOVEMENT_SPEED)
                 .add(Attributes.FOLLOW_RANGE, 48.0D)
                 .add(Attributes.ATTACK_DAMAGE, 3.0D);
     }
