@@ -20,6 +20,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Containers;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -116,6 +117,16 @@ public class FriendEntity extends PathfinderMob {
             return Component.literal(profile.displayName());
         }
         return super.getDisplayName();
+    }
+
+    @Override
+    public HumanoidArm getMainArm() {
+        return HumanoidArm.RIGHT;
+    }
+
+    @Override
+    public boolean isLeftHanded() {
+        return false;
     }
 
     @Override
