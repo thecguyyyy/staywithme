@@ -37,6 +37,9 @@ public class FriendInventoryProvider {
         }
         this.inventory.setItem(slot, stack == null ? ItemStack.EMPTY : stack);
         this.inventory.setChanged();
+        if (slot == this.selectedSlot) {
+            this.friend.syncVisibleEquipmentData();
+        }
     }
 
     public ItemStack addItem(ItemStack stack) {
@@ -67,6 +70,7 @@ public class FriendInventoryProvider {
     public void setSelectedSlot(int selectedSlot) {
         if (this.isValidSlot(selectedSlot)) {
             this.selectedSlot = selectedSlot;
+            this.friend.syncVisibleEquipmentData();
         }
     }
 

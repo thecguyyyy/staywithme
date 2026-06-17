@@ -48,6 +48,7 @@ import java.util.function.Predicate;
 public class FriendEntity extends PathfinderMob {
     public static final int MAX_SAFE_FALL_DISTANCE = 6;
     private static final EntityDataAccessor<String> DATA_COMPANION_SKIN_URL = SynchedEntityData.defineId(FriendEntity.class, EntityDataSerializers.STRING);
+    private static final EntityDataAccessor<ItemStack> DATA_MAIN_HAND_STACK = SynchedEntityData.defineId(FriendEntity.class, EntityDataSerializers.ITEM_STACK);
     private static final int INVENTORY_SIZE = 36;
     private static final int RECOVERED_TASK_OWNER_REMINDER_TICKS = 20 * 60;
 
@@ -97,6 +98,7 @@ public class FriendEntity extends PathfinderMob {
     protected void defineSynchedData() {
         super.defineSynchedData();
         this.entityData.define(DATA_COMPANION_SKIN_URL, "");
+        this.entityData.define(DATA_MAIN_HAND_STACK, ItemStack.EMPTY);
     }
 
     @Override
@@ -113,6 +115,7 @@ public class FriendEntity extends PathfinderMob {
             this.hungerProvider.tick(this);
             this.perception.tick();
             this.friendBrain.tick();
+            this.syncVisibleEquipmentData();
         }
     }
 
@@ -124,6 +127,9 @@ public class FriendEntity extends PathfinderMob {
     @Override
     public ItemStack getItemBySlot(EquipmentSlot slot) {
         if (slot == EquipmentSlot.MAINHAND) {
+            if (this.level().isClientSide) {
+                return this.entityData.get(DATA_MAIN_HAND_STACK);
+            }
             return this.inventoryProvider.getMainHandStack();
         }
         if (slot == EquipmentSlot.OFFHAND) {
@@ -136,6 +142,7 @@ public class FriendEntity extends PathfinderMob {
     public void setItemSlot(EquipmentSlot slot, ItemStack stack) {
         if (slot == EquipmentSlot.MAINHAND) {
             this.inventoryProvider.setMainHandStack(stack);
+            this.syncVisibleEquipmentData();
             return;
         }
         if (slot == EquipmentSlot.OFFHAND) {
@@ -219,6 +226,7 @@ public class FriendEntity extends PathfinderMob {
         if (tag.contains("SelectedItemSlot")) {
             this.inventoryProvider.setSelectedSlot(tag.getInt("SelectedItemSlot"));
         }
+        this.syncVisibleEquipmentData();
         if (tag.contains("FriendHunger", Tag.TAG_COMPOUND)) {
             this.hungerProvider.load(tag.getCompound("FriendHunger"));
         }
@@ -438,6 +446,16 @@ public class FriendEntity extends PathfinderMob {
 
     public String getInventorySummary() {
         return this.inventoryProvider.summary();
+    }
+
+    public void syncVisibleEquipmentData() {
+        if (this.level().isClientSide) {
+            return;
+        }
+        ItemStack currentMainHand = this.inventoryProvider.getMainHandStack();
+        if (!ItemStack.matches(this.entityData.get(DATA_MAIN_HAND_STACK), currentMainHand)) {
+            this.entityData.set(DATA_MAIN_HAND_STACK, currentMainHand.copy());
+        }
     }
 
     private void restorePendingTaskIfNeeded() {
