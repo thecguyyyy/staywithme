@@ -6,8 +6,10 @@ import com.thecguyyyy.staywithme.network.CompanionCharacterActionPacket;
 import com.thecguyyyy.staywithme.network.ModNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
@@ -53,7 +55,7 @@ public class StayWithMeCompanionScreen extends Screen {
                 .bounds(left + (actionWidth + 8) * 3, bottomY, actionWidth, 20)
                 .build());
 
-        this.addCharacterButtons(left, panelWidth);
+        this.addCharacterCards(left, panelWidth);
         this.updateButtonStates();
         if (!this.requested) {
             this.reloadCharacters();
@@ -146,25 +148,29 @@ public class StayWithMeCompanionScreen extends Screen {
         }
     }
 
-    private void addCharacterButtons(int left, int panelWidth) {
+    private void addCharacterCards(int left, int panelWidth) {
         if (this.loading || this.characters.isEmpty()) {
             return;
         }
         int listWidth = panelWidth / 2 - 12;
-        int y = 62;
-        int maxRows = Math.max(1, (this.height - 112) / 24);
-        int rows = Math.min(maxRows, this.characters.size());
+        int gap = 8;
+        int columns = listWidth >= 220 ? 2 : 1;
+        int cardWidth = (listWidth - gap * (columns - 1)) / columns;
+        int cardHeight = 96;
+        int startY = 62;
+        int maxCards = Math.max(columns, ((this.height - 112) / (cardHeight + gap)) * columns);
+        int rows = Math.min(maxCards, this.characters.size());
         for (int i = 0; i < rows; i++) {
             int index = i;
             CompanionCharacterProfile profile = this.characters.get(index);
-            Component label = Component.literal((index == this.selectedIndex ? "> " : "") + profile.displayName());
-            this.addRenderableWidget(Button.builder(label, button -> {
+            int column = i % columns;
+            int row = i / columns;
+            int cardX = left + column * (cardWidth + gap);
+            int cardY = startY + row * (cardHeight + gap);
+            this.addRenderableWidget(new CharacterCardWidget(cardX, cardY, cardWidth, cardHeight, profile, index == this.selectedIndex, () -> {
                         this.selectedIndex = index;
                         this.rebuild();
-                    })
-                    .bounds(left, y, listWidth, 20)
-                    .build());
-            y += 24;
+                    }));
         }
     }
 
@@ -201,5 +207,49 @@ public class StayWithMeCompanionScreen extends Screen {
 
     private int panelWidth() {
         return Math.min(PANEL_MAX_WIDTH, Math.max(300, this.width - 40));
+    }
+
+    private final class CharacterCardWidget extends AbstractWidget {
+        private final CompanionCharacterProfile profile;
+        private final boolean selected;
+        private final Runnable onClick;
+
+        private CharacterCardWidget(int x, int y, int width, int height, CompanionCharacterProfile profile, boolean selected, Runnable onClick) {
+            super(x, y, width, height, Component.literal(profile.displayName()));
+            this.profile = profile;
+            this.selected = selected;
+            this.onClick = onClick;
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+            int background = this.selected ? 0xFF26315C : (this.isHoveredOrFocused() ? 0xFF20264F : 0xFF171B38);
+            graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, background);
+            graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + 24, 0x24FFFFFF);
+            if (this.selected) {
+                graphics.renderOutline(this.getX(), this.getY(), this.width, this.height, 0xFF7EA6FF);
+            }
+
+            String label = StayWithMeCompanionScreen.this.font.plainSubstrByWidth(this.profile.displayName(), this.width - 12);
+            graphics.drawCenteredString(StayWithMeCompanionScreen.this.font, label, this.getX() + this.width / 2, this.getY() + 8, 0xFFFFFF);
+
+            int headSize = Math.min(52, Math.max(32, Math.min(this.width - 20, this.height - 38)));
+            int headX = this.getX() + (this.width - headSize) / 2;
+            int headY = this.getY() + 32;
+            ResourceLocation skinTexture = CompanionSkinTextures.textureFor(null, this.profile.skinUrl());
+            CompanionSkinTextures.renderHead(graphics, headX, headY, headSize, skinTexture);
+        }
+
+        @Override
+        public void onClick(double mouseX, double mouseY) {
+            if (this.active && this.visible) {
+                this.onClick.run();
+            }
+        }
+
+        @Override
+        protected void updateWidgetNarration(NarrationElementOutput output) {
+            this.defaultButtonNarrationText(output);
+        }
     }
 }
