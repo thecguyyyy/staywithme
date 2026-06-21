@@ -39,6 +39,7 @@ import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +68,7 @@ public class FriendEntity extends PathfinderMob {
     private FriendTask pendingRecoveredTask;
     private int pendingRecoveredTaskTicks;
     private CompanionCharacterProfile companionProfile = CompanionCharacterProfile.empty();
+    private Vec3 lastDeltaMovement = Vec3.ZERO;
 
     public FriendEntity(EntityType<? extends FriendEntity> entityType, Level level) {
         super(entityType, level);
@@ -131,6 +133,7 @@ public class FriendEntity extends PathfinderMob {
 
     @Override
     public void tick() {
+        this.lastDeltaMovement = this.getDeltaMovement();
         super.tick();
         if (!this.level().isClientSide) {
             this.restorePendingTaskIfNeeded();
@@ -208,6 +211,7 @@ public class FriendEntity extends PathfinderMob {
         if (this.ownerUuid != null) {
             tag.putUUID("Owner", this.ownerUuid);
         }
+        tag.putFloat("head_yaw", this.yHeadRot);
         tag.put("CompanionProfile", saveCompanionProfile(this.companionProfile));
         tag.putString("FriendState", this.friendState.name());
         tag.putInt("SelectedItemSlot", this.inventoryProvider.getSelectedSlot());
@@ -229,6 +233,11 @@ public class FriendEntity extends PathfinderMob {
         super.readAdditionalSaveData(tag);
         if (tag.hasUUID("Owner")) {
             this.ownerUuid = tag.getUUID("Owner");
+        }
+        if (tag.contains("head_yaw", Tag.TAG_ANY_NUMERIC)) {
+            float headYaw = tag.getFloat("head_yaw");
+            this.setYHeadRot(headYaw);
+            this.yHeadRotO = headYaw;
         }
         if (tag.contains("CompanionProfile", Tag.TAG_COMPOUND)) {
             this.companionProfile = loadCompanionProfile(tag.getCompound("CompanionProfile"));
@@ -361,6 +370,10 @@ public class FriendEntity extends PathfinderMob {
 
     public String getCompanionSkinUrl() {
         return this.entityData.get(DATA_COMPANION_SKIN_URL);
+    }
+
+    public Vec3 lerpDeltaMovement(float partialTicks) {
+        return this.lastDeltaMovement.lerp(this.getDeltaMovement(), partialTicks);
     }
 
     public boolean matchesCompanionProfile(CompanionCharacterProfile profile) {

@@ -89,7 +89,7 @@ public class FriendRenderer extends HumanoidMobRenderer<FriendEntity, PlayerMode
             }
 
             Vec3 view = entity.getViewVector(partialTicks);
-            Vec3 motion = entity.getDeltaMovement();
+            Vec3 motion = entity.lerpDeltaMovement(partialTicks);
             double motionHorizontal = motion.horizontalDistanceSqr();
             double viewHorizontal = view.horizontalDistanceSqr();
             if (motionHorizontal > 0.0D && viewHorizontal > 0.0D) {
