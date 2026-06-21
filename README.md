@@ -457,6 +457,7 @@ Current Forge implementation:
 - `FriendEntity` now fixes its main arm to `HumanoidArm.RIGHT` and reports `isLeftHanded=false`, matching Player2NPC's right-handed companion baseline instead of inheriting random Mob handedness.
 - `FriendEntity` automatic dropped-item pickup now skips items with an active pickup delay and emits the vanilla pickup feedback when it moves stacks into the companion inventory, matching Player2NPC's `cannotPickup()` guard more closely.
 - `FriendEntity` now also applies Player2NPC-style base movement constants: max step height `0.6F` and movement speed `0.4D`, matching Player2NPC's `AutomatoneEntity` baseline before higher-level navigation takes over.
+- `FriendEntity` now mirrors Player2NPC's water-sneak descent behavior: while in water and sneaking, the companion applies the vanilla downward swimming impulse.
 - `FriendEntity` entity registration now uses a Player2NPC-style companion shape: `MobCategory.MISC`, player width/height, 64-block client tracking range, and 1-tick update interval.
 - `FriendRenderer` now applies Player2NPC/PlayerRenderer-style model properties: visible outer skin parts, main/offhand arm poses for use actions and charged crossbows, crouch render offset, player-scale rendering, and fall-flying/swimming rotations.
 - `FriendEntity` persists `head_yaw` and exposes previous/current delta-movement interpolation so `FriendRenderer` can use Player2NPC-style velocity interpolation during fall-flying rotation.

@@ -146,6 +146,14 @@ public class FriendEntity extends PathfinderMob {
     }
 
     @Override
+    public void aiStep() {
+        if (this.isInWater() && this.isShiftKeyDown() && this.isAffectedByFluids()) {
+            this.goDownInWater();
+        }
+        super.aiStep();
+    }
+
+    @Override
     public Iterable<ItemStack> getHandSlots() {
         return List.of(this.inventoryProvider.getMainHandStack(), super.getItemBySlot(EquipmentSlot.OFFHAND));
     }
