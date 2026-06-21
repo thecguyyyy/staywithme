@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 public class FriendMemory {
-    public int schemaVersion = 6;
+    public int schemaVersion = 7;
     public String playerUuid;
     public String playerName;
     public String companionId;
@@ -19,6 +19,7 @@ public class FriendMemory {
     public String companionDescription;
     public String companionSkinUrl;
     public List<String> companionVoiceIds = new ArrayList<>();
+    public Map<String, String> companionEntityUuids = new LinkedHashMap<>();
     public long createdAtEpochMillis;
     public long updatedAtEpochMillis;
     public List<String> recentConversationSummaries = new ArrayList<>();
@@ -40,7 +41,7 @@ public class FriendMemory {
     }
 
     public void normalize(String fallbackPlayerUuid, String fallbackPlayerName) {
-        this.schemaVersion = Math.max(6, this.schemaVersion);
+        this.schemaVersion = Math.max(7, this.schemaVersion);
         if (this.playerUuid == null || this.playerUuid.isBlank()) {
             this.playerUuid = fallbackPlayerUuid;
         }
@@ -67,6 +68,9 @@ public class FriendMemory {
         }
         if (this.companionVoiceIds == null) {
             this.companionVoiceIds = new ArrayList<>();
+        }
+        if (this.companionEntityUuids == null) {
+            this.companionEntityUuids = new LinkedHashMap<>();
         }
         if (this.createdAtEpochMillis <= 0L) {
             this.createdAtEpochMillis = System.currentTimeMillis();

@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -53,12 +54,23 @@ public final class CompanionLifecycle {
             return sessionCompanion;
         }
 
+        Optional<FriendEntity> rememberedCompanion = sessionManaged
+                ? resolveRememberedCompanion(player, safeProfile, profileKey)
+                : Optional.empty();
+        if (rememberedCompanion.isPresent()) {
+            applyCompanionProfile(rememberedCompanion.get(), safeProfile);
+            moveNearPlayer(rememberedCompanion.get(), player);
+            sessionCompanionsFor(player).put(profileKey, rememberedCompanion.get().getUUID());
+            return rememberedCompanion;
+        }
+
         Optional<FriendEntity> ownedCompanion = findNearestOwnedCompanion(player, safeProfile, EXISTING_COMPANION_SEARCH_RADIUS);
         if (ownedCompanion.isPresent()) {
             applyCompanionProfile(ownedCompanion.get(), safeProfile);
             moveNearPlayer(ownedCompanion.get(), player);
             if (sessionManaged) {
                 sessionCompanionsFor(player).put(profileKey, ownedCompanion.get().getUUID());
+                rememberCompanion(player, profileKey, ownedCompanion.get().getUUID());
             }
             return ownedCompanion;
         }
@@ -92,6 +104,7 @@ public final class CompanionLifecycle {
         level.addFreshEntity(friend);
         if (sessionManaged) {
             sessionCompanionsFor(player).put(safeProfile.key(), friend.getUUID());
+            rememberCompanion(player, safeProfile.key(), friend.getUUID());
         }
         return friend;
     }
@@ -114,8 +127,9 @@ public final class CompanionLifecycle {
             return false;
         }
         boolean dismissed = false;
-        for (UUID companionId : companions.values()) {
-            dismissed |= dismissCompanion(player.getServer(), companionId);
+        for (Map.Entry<String, UUID> companion : companions.entrySet()) {
+            dismissed |= dismissCompanion(player.getServer(), companion.getValue());
+            forgetCompanion(player, companion.getKey());
         }
         return dismissed;
     }
@@ -139,6 +153,7 @@ public final class CompanionLifecycle {
             if (!assignedKeys.contains(key)) {
                 dismissCompanion(player.getServer(), uuid);
                 companions.remove(key, uuid);
+                forgetCompanion(player, key);
             }
         });
 
@@ -157,6 +172,7 @@ public final class CompanionLifecycle {
         ConcurrentMap<String, UUID> companions = SESSION_COMPANIONS.get(player.getUUID());
         UUID sessionUuid = companions == null ? null : companions.remove(safeProfile.key());
         if (dismissCompanion(player.getServer(), sessionUuid)) {
+            forgetCompanion(player, safeProfile.key());
             return true;
         }
 
@@ -166,6 +182,7 @@ public final class CompanionLifecycle {
         }
         FriendEntity friend = ownedCompanion.get();
         removeSessionCompanion(friend.getUUID());
+        forgetCompanion(player, safeProfile.key());
         friend.stopTask();
         friend.discard();
         return true;
@@ -178,6 +195,7 @@ public final class CompanionLifecycle {
         }
         FriendEntity friend = companion.get();
         removeSessionCompanion(friend.getUUID());
+        forgetCompanion(player, friend.getUUID());
         friend.stopTask();
         friend.discard();
         return true;
@@ -224,14 +242,45 @@ public final class CompanionLifecycle {
         if (companionId == null) {
             return Optional.empty();
         }
-        Entity entity = player.serverLevel().getEntity(companionId);
-        if (entity instanceof FriendEntity friend
-                && friend.isAlive()
-                && friend.isOwnedBy(player)
-                && friend.getCompanionProfileKey().equals(profileKey)) {
+        Optional<FriendEntity> remembered = findCompanionByUuid(player.getServer(), companionId);
+        if (remembered.isPresent()
+                && remembered.get().isAlive()
+                && remembered.get().isOwnedBy(player)
+                && remembered.get().getCompanionProfileKey().equals(profileKey)) {
+            FriendEntity friend = remembered.get();
             return Optional.of(friend);
         }
         companions.remove(profileKey, companionId);
+        forgetCompanion(player, profileKey);
+        return Optional.empty();
+    }
+
+    private static Optional<FriendEntity> resolveRememberedCompanion(
+            ServerPlayer player,
+            CompanionCharacterProfile profile,
+            String profileKey
+    ) {
+        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
+        String rememberedValue = memory.companionEntityUuids.get(profileKey);
+        UUID companionId = parseUuid(rememberedValue).orElse(null);
+        if (companionId == null) {
+            if (rememberedValue != null) {
+                memory.companionEntityUuids.remove(profileKey);
+                memory.touch();
+                JsonMemoryStore.save(memory);
+            }
+            return Optional.empty();
+        }
+        Optional<FriendEntity> remembered = findCompanionByUuid(player.getServer(), companionId)
+                .filter(friend -> friend.isAlive()
+                        && friend.isOwnedBy(player)
+                        && friend.matchesCompanionProfile(profile));
+        if (remembered.isPresent()) {
+            return remembered;
+        }
+        memory.companionEntityUuids.remove(profileKey);
+        memory.touch();
+        JsonMemoryStore.save(memory);
         return Optional.empty();
     }
 
@@ -248,6 +297,19 @@ public final class CompanionLifecycle {
             }
         }
         return false;
+    }
+
+    private static Optional<FriendEntity> findCompanionByUuid(MinecraftServer server, UUID companionId) {
+        if (server == null || companionId == null) {
+            return Optional.empty();
+        }
+        for (ServerLevel level : server.getAllLevels()) {
+            Entity entity = level.getEntity(companionId);
+            if (entity instanceof FriendEntity friend) {
+                return Optional.of(friend);
+            }
+        }
+        return Optional.empty();
     }
 
     private static void moveNearPlayer(FriendEntity friend, ServerPlayer player) {
@@ -319,5 +381,49 @@ public final class CompanionLifecycle {
             return;
         }
         SESSION_COMPANIONS.values().forEach(map -> map.values().removeIf(uuid -> uuid.equals(companionUuid)));
+    }
+
+    private static void rememberCompanion(ServerPlayer player, String profileKey, UUID companionUuid) {
+        if (player == null || profileKey == null || profileKey.isBlank() || companionUuid == null) {
+            return;
+        }
+        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
+        memory.companionEntityUuids.put(profileKey, companionUuid.toString());
+        memory.touch();
+        JsonMemoryStore.save(memory);
+    }
+
+    private static void forgetCompanion(ServerPlayer player, String profileKey) {
+        if (player == null || profileKey == null || profileKey.isBlank()) {
+            return;
+        }
+        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
+        if (memory.companionEntityUuids.remove(profileKey) != null) {
+            memory.touch();
+            JsonMemoryStore.save(memory);
+        }
+    }
+
+    private static void forgetCompanion(ServerPlayer player, UUID companionUuid) {
+        if (player == null || companionUuid == null) {
+            return;
+        }
+        FriendMemory memory = JsonMemoryStore.load(player.getUUID(), player.getGameProfile().getName());
+        boolean removed = memory.companionEntityUuids.values().removeIf(value -> companionUuid.toString().equals(value));
+        if (removed) {
+            memory.touch();
+            JsonMemoryStore.save(memory);
+        }
+    }
+
+    private static Optional<UUID> parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(UUID.fromString(value));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
     }
 }
