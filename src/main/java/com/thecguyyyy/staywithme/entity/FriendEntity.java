@@ -155,7 +155,7 @@ public class FriendEntity extends PathfinderMob {
 
     @Override
     public Iterable<ItemStack> getHandSlots() {
-        return List.of(this.inventoryProvider.getMainHandStack(), super.getItemBySlot(EquipmentSlot.OFFHAND));
+        return List.of(this.getItemBySlot(EquipmentSlot.MAINHAND), this.getItemBySlot(EquipmentSlot.OFFHAND));
     }
 
     @Override
