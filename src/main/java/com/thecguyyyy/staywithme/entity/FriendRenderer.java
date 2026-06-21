@@ -2,6 +2,7 @@ package com.thecguyyyy.staywithme.entity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
+import com.thecguyyyy.staywithme.StayWithMeMod;
 import com.thecguyyyy.staywithme.client.CompanionSkinTextures;
 import net.minecraft.client.model.HumanoidArmorModel;
 import net.minecraft.client.model.HumanoidModel;
@@ -48,8 +49,12 @@ public class FriendRenderer extends HumanoidMobRenderer<FriendEntity, PlayerMode
             MultiBufferSource buffer,
             int packedLight
     ) {
-        this.setModelProperties(entity);
-        super.render(entity, entityYaw, partialTicks, poseStack, buffer, packedLight);
+        try {
+            this.setModelProperties(entity);
+            super.render(entity, entityYaw, partialTicks, poseStack, buffer, packedLight);
+        } catch (Exception error) {
+            StayWithMeMod.LOGGER.error("Failed to render companion {}", entity.getUUID(), error);
+        }
     }
 
     @Override
