@@ -242,7 +242,7 @@ public final class CompanionLifecycle {
         if (companionId == null) {
             return Optional.empty();
         }
-        Optional<FriendEntity> remembered = findCompanionByUuid(player.getServer(), companionId);
+        Optional<FriendEntity> remembered = findCompanionByUuid(player.serverLevel(), companionId);
         if (remembered.isPresent()
                 && remembered.get().isAlive()
                 && remembered.get().isOwnedBy(player)
@@ -251,6 +251,7 @@ public final class CompanionLifecycle {
             return Optional.of(friend);
         }
         companions.remove(profileKey, companionId);
+        dismissCompanion(player.getServer(), companionId);
         forgetCompanion(player, profileKey);
         return Optional.empty();
     }
@@ -271,13 +272,14 @@ public final class CompanionLifecycle {
             }
             return Optional.empty();
         }
-        Optional<FriendEntity> remembered = findCompanionByUuid(player.getServer(), companionId)
+        Optional<FriendEntity> remembered = findCompanionByUuid(player.serverLevel(), companionId)
                 .filter(friend -> friend.isAlive()
                         && friend.isOwnedBy(player)
                         && friend.matchesCompanionProfile(profile));
         if (remembered.isPresent()) {
             return remembered;
         }
+        dismissCompanion(player.getServer(), companionId);
         memory.companionEntityUuids.remove(profileKey);
         memory.touch();
         JsonMemoryStore.save(memory);
@@ -299,15 +301,13 @@ public final class CompanionLifecycle {
         return false;
     }
 
-    private static Optional<FriendEntity> findCompanionByUuid(MinecraftServer server, UUID companionId) {
-        if (server == null || companionId == null) {
+    private static Optional<FriendEntity> findCompanionByUuid(ServerLevel level, UUID companionId) {
+        if (level == null || companionId == null) {
             return Optional.empty();
         }
-        for (ServerLevel level : server.getAllLevels()) {
-            Entity entity = level.getEntity(companionId);
-            if (entity instanceof FriendEntity friend) {
-                return Optional.of(friend);
-            }
+        Entity entity = level.getEntity(companionId);
+        if (entity instanceof FriendEntity friend) {
+            return Optional.of(friend);
         }
         return Optional.empty();
     }
