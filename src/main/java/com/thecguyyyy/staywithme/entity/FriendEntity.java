@@ -24,6 +24,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Containers;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -436,6 +438,20 @@ public class FriendEntity extends PathfinderMob implements IEntityAdditionalSpaw
         return this.lastDeltaMovement.lerp(this.getDeltaMovement(), partialTicks);
     }
 
+    public boolean attackAsCompanion(Entity target) {
+        if (target == null || !target.isAlive()) {
+            return false;
+        }
+        if (target instanceof LivingEntity livingTarget) {
+            this.setTarget(livingTarget);
+        }
+        boolean hit = this.doHurtTarget(target);
+        if (hit) {
+            this.swing(InteractionHand.MAIN_HAND);
+        }
+        return hit;
+    }
+
     public boolean matchesCompanionProfile(CompanionCharacterProfile profile) {
         if (profile == null) {
             return false;
@@ -460,6 +476,12 @@ public class FriendEntity extends PathfinderMob implements IEntityAdditionalSpaw
 
     public SimpleContainer getFriendInventory() {
         return this.inventory;
+    }
+
+    public void onInventoryProviderSlotChanged(int slot, ItemStack stack) {
+    }
+
+    public void onInventoryProviderSelectedSlotChanged(int selectedSlot) {
     }
 
     public ItemStack insertIntoInventory(ItemStack stack) {

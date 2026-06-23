@@ -69,7 +69,7 @@ public class DummyEmbodiedController implements EmbodiedController {
 
     @Override
     public boolean attack(Entity target) {
-        return this.friend.doHurtTarget(target);
+        return this.friend.attackAsCompanion(target);
     }
 
     @Override

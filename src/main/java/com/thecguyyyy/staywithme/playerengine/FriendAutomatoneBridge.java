@@ -30,7 +30,6 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
         this.interactionManager = new LivingEntityInteractionManager(friend);
         this.hungerManager = new LivingEntityHungerManager();
         this.initialized = true;
-        this.syncFromFriend();
     }
 
     @Override

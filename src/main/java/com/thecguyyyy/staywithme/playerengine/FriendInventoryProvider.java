@@ -40,6 +40,7 @@ public class FriendInventoryProvider {
         if (slot == this.selectedSlot) {
             this.friend.syncVisibleEquipmentData();
         }
+        this.friend.onInventoryProviderSlotChanged(slot, this.inventory.getItem(slot));
     }
 
     public ItemStack addItem(ItemStack stack) {
@@ -52,6 +53,10 @@ public class FriendInventoryProvider {
         }
         ItemStack removed = this.inventory.removeItem(slot, amount);
         this.inventory.setChanged();
+        if (slot == this.selectedSlot) {
+            this.friend.syncVisibleEquipmentData();
+        }
+        this.friend.onInventoryProviderSlotChanged(slot, this.inventory.getItem(slot));
         return removed;
     }
 
@@ -71,6 +76,7 @@ public class FriendInventoryProvider {
         if (this.isValidSlot(selectedSlot)) {
             this.selectedSlot = selectedSlot;
             this.friend.syncVisibleEquipmentData();
+            this.friend.onInventoryProviderSelectedSlotChanged(selectedSlot);
         }
     }
 
