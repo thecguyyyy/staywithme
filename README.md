@@ -1,58 +1,64 @@
 # staywithme
 
-`staywithme` 是一个 Forge 1.20.1 AI companion mod。它的目标不是做一个只会聊天的机器人，而是在 Minecraft 世界中提供一个有实体身体、能跟随玩家、理解玩家指令并执行基础动作的 companion NPC。
+`staywithme` 是一个 Forge 1.20.1 AI companion mod。当前开发方向已经调整为 **PlayerEngine-first + Player2NPC-style companion**：先把 Player2NPC 已经验证过的伴随实体、角色选择、生命周期、PlayerEngine provider、渲染和装备同步能力搬到 Forge 侧，再把 StayWithMe 自己的 LLM 规划、记忆、调试 UI、远征策略和 fallback 行为放在这个 companion 外壳之上。
+
+这个项目现在不再以“继续手写一整套原版生存远征 AI”为主线。广义 Minecraft 执行能力优先交给 PlayerEngine / TaskCatalogue；StayWithMe 负责决策边界、记忆、策略、可视化调试和 PlayerEngine 不可用时的有限兜底。
 
 ## 架构
 
 ```text
-玩家说话
+Player2NPC-style companion shell
    |
-LLM 慢速理解任务
+Forge FriendEntity / PlayerEngineFriendEntity
    |
-生成结构化任务
+PlayerEngine providers
+IAutomatone + inventory + interaction + hunger
    |
-本地行为控制器执行
+PlayerEngineController / TaskCatalogue
    |
-Minecraft 世界 API 感知方块、实体、位置、背包
+StayWithMe layer
+LLM planning + memory + expedition policy + debug UI + fallback
    |
-任务完成或失败时再问 LLM
+Minecraft world
 ```
 
-LLM 只负责高层任务规划。本地行为控制器负责 tick 级移动、寻路、攻击、方块交互和状态更新。
+PlayerEngine 存在并启用时，移动、获取物品、战斗、睡觉、钓鱼、耕作、装备、容器转移、熔炼和基础资源采集都优先走 PlayerEngine。Forge-native 逻辑保留为 fallback，主要用于 StayWithMe 特有的远征记忆、安全策略、错误恢复、调试命令和 PlayerEngine 没覆盖或启动失败的窄场景。
 
 ## 为什么不能每 tick 调 LLM
 
 Minecraft server tick 必须稳定运行。LLM 请求有网络延迟、费用、失败率和速率限制，如果每 tick 调用会阻塞或拖慢服务器，并且会让 NPC 的动作控制变得不可预测。本项目只在 `/staywithme ask`、任务开始、任务失败重规划、任务完成总结或重要事件发生时触发慢速规划；tick 内只执行本地状态机。
 
-## 当前 MVP 命令
+## 当前优先入口
+
+Player2NPC / PlayerEngine-first 相关入口：
 
 - `/staywithme spawn`：在玩家附近生成 companion。
+- `H` 或 `/staywithmecompanions`：打开 Player2NPC-style companion selector，从 PlayerEngine assigned characters 中选择角色。
+- `/staywithme companions` / `/staywithme activecompanions`：列出当前通过 session/persisted UUID map 追踪到的 active companions。
+- `/staywithme dismiss` / `/staywithme despawn`：解散最近的 owned companion。
+- `/staywithme dismissall` / `/staywithme dismissallcompanions`：按 tracked companion map 批量解散当前玩家的 PlayerEngine companions。
 - `/staywithme follow`：让最近的 companion 跟随玩家。
 - `/staywithme goto <x> <y> <z>`：让最近的 companion 前往当前维度的指定方块坐标，优先使用 PlayerEngine `GetToBlockTask`。
 - `/staywithme stop`：停止最近 companion 的当前任务。
-- `/staywithme crafttable`：让 companion 自己找原木、制作工作台并放到地上。
-- `/staywithme craftingtable` / `/staywithme workbench`：`crafttable` 的别名。
-- `/staywithme sticks`：让 companion 获取木材并制作木棍。
-- `/staywithme chest`：让 companion 获取木材并制作一个箱子。
-- `/staywithme woodenaxe` / `/staywithme woodaxe`：让 companion 获取木材、准备工作台并制作木斧。
-- `/staywithme woodenpickaxe` / `/staywithme woodpickaxe`：让 companion 获取木材、准备工作台并制作木镐。
-- `/staywithme stonepickaxe` / `/staywithme stonepick`：让 companion 获取木材、做木镐、挖圆石并制作石镐。
-- `/staywithme furnace`：让 companion 获取木材、做木镐、挖圆石并制作熔炉。
-- `/staywithme ironingot` / `/staywithme iron`：让 companion 从零开始尝试制作工具、挖圆石/煤/铁矿、放置熔炉并熔炼铁锭。
-- `/staywithme ironpickaxe` / `/staywithme ironpick`：让 companion 从零开始准备木镐、石镐、熔炉、煤和 3 个铁锭，然后制作铁镐。
-- `/staywithme craft <item> [amount]`：按服务端 `RecipeManager` 中的原版 `minecraft:crafting` 配方动态规划并制作指定物品，例如 `minecraft:wooden_shovel`。
-- `/staywithme status`：显示最近 companion 的状态和当前任务。
-- `/staywithme observe`：刷新并显示 companion 当前本地感知到的世界摘要。
-- `/staywithme recipes`：显示当前服务端 RecipeManager 已加载的 recipe type 统计。
-- `/staywithme recipes <query>`：按配方 id、recipe type、serializer、输出物品或 ingredient 查询当前加载的配方。
+- `/staywithme status`：显示最近 companion 的状态、PlayerEngine bridge/provider 状态、库存、饥饿、感知和任务。
+- `/staywithme capabilities`：显示当前高层任务入口、PlayerEngine-first 是否启用，以及 Forge fallback 范围。
+- `/staywithme catalogue [query]`：查询 PlayerEngine TaskCatalogue 名称映射，用于调试 PlayerEngine 能否执行某类任务。
+
+仍然保留的 StayWithMe fallback / 调试入口：
+
+- `/staywithme crafttable` / `/staywithme craftingtable` / `/staywithme workbench`：测试资源获取、配方和放置闭环。
+- `/staywithme sticks`、`/staywithme chest`、`/staywithme woodenaxe`、`/staywithme woodenpickaxe`、`/staywithme stonepickaxe`、`/staywithme furnace`、`/staywithme ironingot`、`/staywithme ironpickaxe`：旧生存工作流测试入口，PlayerEngine 可用时优先走 PlayerEngine acquisition，失败时才回落到 Forge-native survival fallback。
+- `/staywithme craft <item> [amount]`：按服务端 `RecipeManager` 中的原版 `minecraft:crafting` 配方动态规划并制作指定物品。
 - `/staywithme mine <resource> [amount]`：执行第一版可行动采矿策略；已知资源会映射到可挖方块组，优先使用 PlayerEngine/Baritone mine process，失败时回落到本地生存交互。
-- `/staywithme attack` / `/staywithme fight`: attack one nearby hostile mob, preferring PlayerEngine `KillEntityTask` when available.
-- `/staywithme sleep` / `/staywithme night`: sleep through the night with PlayerEngine `SleepThroughNightTask`; daytime completes immediately.
-- `/staywithme clearliquid <x> <y> <z>` / `/staywithme clearwater <x> <y> <z>` / `/staywithme clearlava <x> <y> <z>`: clear a water or lava block at a concrete coordinate with PlayerEngine `ClearLiquidTask`, falling back to a carried throwaway block when reachable.
+- `/staywithme attack` / `/staywithme fight`：攻击附近敌对生物，优先使用 PlayerEngine `KillEntityTask`。
+- `/staywithme sleep` / `/staywithme night`：优先使用 PlayerEngine `SleepThroughNightTask`。
+- `/staywithme clearliquid <x> <y> <z>` / `/staywithme clearwater <x> <y> <z>` / `/staywithme clearlava <x> <y> <z>`：优先使用 PlayerEngine `ClearLiquidTask`。
 - `/staywithme mineplan <resource> [amount]`：生成高层采矿远征 JSON 策略并写入长期记忆；LLM 未配置时使用本地原版策略 fallback。
-- `/staywithme expedition <resource> [amount]`：先生成远征策略，再启动当前可执行采矿 workflow；低层移动/挖掘仍由本地控制器和 PlayerEngine/Baritone 执行。
+- `/staywithme expedition <resource> [amount]`：StayWithMe 特有远征策略入口，不是当前 Player2NPC 对齐主线；低层移动/挖掘仍优先由 PlayerEngine/Baritone 执行。
 - `/staywithme oreinfo <resource>`：异步询问 LLM 分析矿物/资源分布策略，返回 JSON 后写入长期记忆；LLM 未配置时使用本地 fallback。
 - `/staywithme ask <message>`：把玩家输入发送给任务规划器；LLM 未启用时使用本地 fallback。
+- `/staywithme observe`：刷新并显示 companion 当前本地感知到的世界摘要。
+- `/staywithme recipes` / `/staywithme recipes <query>`：调试服务端 RecipeManager。
 - `/staywithme memory`：显示当前玩家的简单 JSON 记忆。
 - `/staywithme memory learnresource <resource> <hint>`：手动写入一条可跨世界迁移的资源知识，例如钻石或模组矿物的获取经验。
 - `/staywithme memory export`：导出当前 companion 记忆到 `config/staywithme/memory_exports/`。
@@ -74,9 +80,9 @@ companion make an iron pickaxe
 伙伴 做一个工作台
 ```
 
-## 工作台任务测试
+## Legacy Fallback 工作流测试
 
-工作台任务是当前长任务链 MVP。它不读取玩家背包，而是使用 companion 自己的 36 格内部背包：
+以下工作流保留用于测试 StayWithMe 的 Forge-native fallback 和 PlayerEngine acquisition 边界。它们不是当前 Player2NPC 对齐主线，但仍可用于验证 companion 自己的 36 格内部背包、配方、放置和资源获取：
 
 当前实现已经抽成 workflow：
 
@@ -203,9 +209,9 @@ CRAFT_ITEM minecraft:iron_pickaxe x1
 /staywithme ask make a crafting table and put it down
 ```
 
-## 采矿远征策略
+## StayWithMe 远征策略（非当前主线）
 
-主动下矿洞、分层挖矿、避险、回家补给不会由 LLM 每 tick 发送低层指令。当前设计是：
+远征是 StayWithMe 自己的策略层能力，不是 Player2NPC 对齐的核心功能。主动下矿洞、分层挖矿、避险、回家补给不会由 LLM 每 tick 发送低层指令。当前设计是：
 
 ```text
 LLM 或本地 fallback
