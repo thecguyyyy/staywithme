@@ -11,11 +11,16 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.ItemStack;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionManagerProvider, IHungerManagerProvider {
     private final FriendEntity friend;
     private final LivingEntityInventory livingInventory;
     private final LivingEntityInteractionManager interactionManager;
     private final LivingEntityHungerManager hungerManager;
+    private final List<ItemStack> armorSnapshot = new ArrayList<>();
+    private final List<ItemStack> offhandSnapshot = new ArrayList<>();
     private boolean initialized;
     private String lastError = "";
 
@@ -69,7 +74,9 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
         }
         for (int slot = 0; slot < this.livingInventory.armor.size(); slot++) {
             EquipmentSlot equipmentSlot = EquipmentSlot.byTypeAndIndex(EquipmentSlot.Type.ARMOR, slot);
-            this.livingInventory.armor.set(slot, this.friend.getItemBySlot(equipmentSlot).copy());
+            ItemStack stack = this.friend.getItemBySlot(equipmentSlot).copy();
+            this.livingInventory.armor.set(slot, stack.copy());
+            this.setSnapshot(this.armorSnapshot, slot, stack);
         }
         this.syncFromFriendOffhand();
         this.livingInventory.selectedSlot = this.friend.getInventoryProvider().getSelectedSlot();
@@ -85,13 +92,13 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
             EquipmentSlot equipmentSlot = EquipmentSlot.byTypeAndIndex(EquipmentSlot.Type.ARMOR, slot);
             ItemStack entityStack = this.friend.getItemBySlot(equipmentSlot);
             ItemStack bridgeStack = this.livingInventory.armor.get(slot);
-            if (ItemStack.matches(entityStack, bridgeStack)) {
-                continue;
-            }
-            if (!entityStack.isEmpty()) {
-                this.livingInventory.armor.set(slot, entityStack.copy());
-            } else {
+            ItemStack previousStack = this.snapshotAt(this.armorSnapshot, slot);
+            if (!ItemStack.matches(bridgeStack, previousStack)) {
                 this.friend.setItemSlot(equipmentSlot, bridgeStack.copy());
+                this.setSnapshot(this.armorSnapshot, slot, bridgeStack);
+            } else if (!ItemStack.matches(entityStack, previousStack)) {
+                this.livingInventory.armor.set(slot, entityStack.copy());
+                this.setSnapshot(this.armorSnapshot, slot, entityStack);
             }
         }
         this.syncToFriendOffhand();
@@ -120,9 +127,11 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
 
     private void syncFromFriendOffhand() {
         for (int slot = 0; slot < this.livingInventory.offHand.size(); slot++) {
-            this.livingInventory.offHand.set(slot, slot == 0
+            ItemStack stack = slot == 0
                     ? this.friend.getItemBySlot(EquipmentSlot.OFFHAND).copy()
-                    : ItemStack.EMPTY);
+                    : ItemStack.EMPTY;
+            this.livingInventory.offHand.set(slot, stack.copy());
+            this.setSnapshot(this.offhandSnapshot, slot, stack);
         }
     }
 
@@ -132,8 +141,13 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
         }
         ItemStack bridgeStack = this.livingInventory.offHand.get(0);
         ItemStack entityStack = this.friend.getItemBySlot(EquipmentSlot.OFFHAND);
-        if (!ItemStack.matches(entityStack, bridgeStack)) {
+        ItemStack previousStack = this.snapshotAt(this.offhandSnapshot, 0);
+        if (!ItemStack.matches(bridgeStack, previousStack)) {
             this.friend.setItemSlot(EquipmentSlot.OFFHAND, bridgeStack.copy());
+            this.setSnapshot(this.offhandSnapshot, 0, bridgeStack);
+        } else if (!ItemStack.matches(entityStack, previousStack)) {
+            this.livingInventory.offHand.set(0, entityStack.copy());
+            this.setSnapshot(this.offhandSnapshot, 0, entityStack);
         }
     }
 
@@ -141,5 +155,21 @@ public class FriendAutomatoneBridge implements IInventoryProvider, IInteractionM
         this.friend.getHungerProvider().setFoodLevel(this.hungerManager.getFoodLevel());
         this.friend.getHungerProvider().setSaturationLevel(this.hungerManager.getSaturationLevel());
         this.friend.getHungerProvider().setExhaustion(this.hungerManager.getExhaustion());
+    }
+
+    private ItemStack snapshotAt(List<ItemStack> snapshots, int slot) {
+        this.ensureSnapshotSize(snapshots, slot + 1);
+        return snapshots.get(slot);
+    }
+
+    private void setSnapshot(List<ItemStack> snapshots, int slot, ItemStack stack) {
+        this.ensureSnapshotSize(snapshots, slot + 1);
+        snapshots.set(slot, stack == null ? ItemStack.EMPTY : stack.copy());
+    }
+
+    private void ensureSnapshotSize(List<ItemStack> snapshots, int size) {
+        while (snapshots.size() < size) {
+            snapshots.add(ItemStack.EMPTY);
+        }
     }
 }

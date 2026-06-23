@@ -35,29 +35,41 @@ public final class StayWithMeLifecycleEvents {
 
     private static void summonPlayerEngineCompanionsAsync(ServerPlayer player) {
         if (player.getServer() == null) {
-            ensureDefaultCompanion(player);
+            player.sendSystemMessage(Component.literal("Could not request PlayerEngine companion characters."));
             return;
         }
         CompletableFuture
                 .supplyAsync(() -> PlayerEngineCharacterProfiles.requestCharacters(player))
                 .whenCompleteAsync((profiles, error) -> {
+                    if (!isPlayerStillOnline(player)) {
+                        return;
+                    }
                     if (error != null) {
                         StayWithMeMod.LOGGER.warn(
                                 "Failed to load PlayerEngine companion characters for {}",
                                 player.getGameProfile().getName(),
                                 error
                         );
-                        ensureDefaultCompanion(player);
+                        player.sendSystemMessage(Component.literal("Could not load PlayerEngine companion characters."));
                         return;
                     }
                     List<CompanionCharacterProfile> safeProfiles = profiles == null ? List.of() : profiles;
-                    if (safeProfiles.isEmpty()) {
-                        ensureDefaultCompanion(player);
+                    CompanionLifecycle.syncSessionCompanionsFor(player, safeProfiles);
+                    long assignedCount = safeProfiles.stream()
+                            .filter(profile -> profile != null && profile.hasIdentity())
+                            .count();
+                    if (assignedCount <= 0L) {
+                        player.sendSystemMessage(Component.literal("No PlayerEngine companion characters are assigned."));
                         return;
                     }
-                    CompanionLifecycle.syncSessionCompanionsFor(player, safeProfiles);
-                    player.sendSystemMessage(Component.literal("Companions ready: " + safeProfiles.size()));
+                    player.sendSystemMessage(Component.literal("Companions ready: " + assignedCount));
                 }, player.getServer());
+    }
+
+    private static boolean isPlayerStillOnline(ServerPlayer player) {
+        return player != null
+                && player.getServer() != null
+                && player.getServer().getPlayerList().getPlayer(player.getUUID()) == player;
     }
 
     private static void ensureDefaultCompanion(ServerPlayer player) {

@@ -12,7 +12,10 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -40,6 +43,8 @@ import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.entity.IEntityAdditionalSpawnData;
+import net.minecraftforge.network.NetworkHooks;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -47,7 +52,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Predicate;
 
-public class FriendEntity extends PathfinderMob {
+public class FriendEntity extends PathfinderMob implements IEntityAdditionalSpawnData {
     public static final int MAX_SAFE_FALL_DISTANCE = 6;
     private static final float PLAYER2NPC_STEP_HEIGHT = 0.6F;
     private static final double PLAYER2NPC_MOVEMENT_SPEED = 0.4D;
@@ -151,11 +156,29 @@ public class FriendEntity extends PathfinderMob {
             this.goDownInWater();
         }
         super.aiStep();
+        this.setYHeadRot(this.getYRot());
+    }
+
+    @Override
+    public void knockback(double strength, double x, double z) {
+        if (this.hurtMarked) {
+            super.knockback(strength, x, z);
+        }
     }
 
     @Override
     public Iterable<ItemStack> getHandSlots() {
         return List.of(this.getItemBySlot(EquipmentSlot.MAINHAND), this.getItemBySlot(EquipmentSlot.OFFHAND));
+    }
+
+    @Override
+    public Iterable<ItemStack> getArmorSlots() {
+        return List.of(
+                this.getItemBySlot(EquipmentSlot.FEET),
+                this.getItemBySlot(EquipmentSlot.LEGS),
+                this.getItemBySlot(EquipmentSlot.CHEST),
+                this.getItemBySlot(EquipmentSlot.HEAD)
+        );
     }
 
     @Override
@@ -184,6 +207,35 @@ public class FriendEntity extends PathfinderMob {
             return;
         }
         super.setItemSlot(slot, stack);
+    }
+
+    @Override
+    public Packet<ClientGamePacketListener> getAddEntityPacket() {
+        return NetworkHooks.getEntitySpawningPacket(this);
+    }
+
+    @Override
+    public void writeSpawnData(FriendlyByteBuf buffer) {
+        CompanionCharacterProfile.encode(this.getCompanionProfile(), buffer);
+        buffer.writeItem(this.getItemBySlot(EquipmentSlot.MAINHAND));
+        buffer.writeItem(this.getItemBySlot(EquipmentSlot.OFFHAND));
+        buffer.writeItem(this.getItemBySlot(EquipmentSlot.FEET));
+        buffer.writeItem(this.getItemBySlot(EquipmentSlot.LEGS));
+        buffer.writeItem(this.getItemBySlot(EquipmentSlot.CHEST));
+        buffer.writeItem(this.getItemBySlot(EquipmentSlot.HEAD));
+    }
+
+    @Override
+    public void readSpawnData(FriendlyByteBuf buffer) {
+        this.companionProfile = CompanionCharacterProfile.decode(buffer);
+        this.syncCompanionProfileData();
+        this.applyCompanionProfileName();
+        this.entityData.set(DATA_MAIN_HAND_STACK, buffer.readItem());
+        this.setItemSlot(EquipmentSlot.OFFHAND, buffer.readItem());
+        this.setItemSlot(EquipmentSlot.FEET, buffer.readItem());
+        this.setItemSlot(EquipmentSlot.LEGS, buffer.readItem());
+        this.setItemSlot(EquipmentSlot.CHEST, buffer.readItem());
+        this.setItemSlot(EquipmentSlot.HEAD, buffer.readItem());
     }
 
     @Override

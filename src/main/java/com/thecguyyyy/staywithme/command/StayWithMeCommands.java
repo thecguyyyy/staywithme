@@ -56,6 +56,8 @@ public final class StayWithMeCommands {
                         .then(Commands.literal("spawn").executes(StayWithMeCommands::spawn))
                         .then(Commands.literal("dismiss").executes(StayWithMeCommands::dismiss))
                         .then(Commands.literal("despawn").executes(StayWithMeCommands::dismiss))
+                        .then(Commands.literal("dismissall").executes(StayWithMeCommands::dismissAll))
+                        .then(Commands.literal("dismissallcompanions").executes(StayWithMeCommands::dismissAll))
                         .then(Commands.literal("follow").executes(StayWithMeCommands::follow))
                         .then(Commands.literal("goto")
                                 .then(Commands.argument("x", IntegerArgumentType.integer(-30000000, 30000000))
@@ -235,6 +237,8 @@ public final class StayWithMeCommands {
                         .then(Commands.literal("deposit").executes(StayWithMeCommands::depositInventory))
                         .then(Commands.literal("stash").executes(StayWithMeCommands::depositInventory))
                         .then(Commands.literal("status").executes(StayWithMeCommands::status))
+                        .then(Commands.literal("companions").executes(StayWithMeCommands::companions))
+                        .then(Commands.literal("activecompanions").executes(StayWithMeCommands::companions))
                         .then(Commands.literal("expeditionstatus").executes(StayWithMeCommands::expeditionStatus))
                         .then(Commands.literal("observe").executes(StayWithMeCommands::observe))
                         .then(Commands.literal("integrations").executes(StayWithMeCommands::integrations))
@@ -288,6 +292,17 @@ public final class StayWithMeCommands {
             return 0;
         }
         context.getSource().sendSuccess(() -> Component.translatable("commands.staywithme.dismissed"), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int dismissAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        int dismissed = CompanionLifecycle.dismissAllCompanions(player);
+        if (dismissed <= 0) {
+            context.getSource().sendFailure(Component.literal("No tracked companions were dismissed."));
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> Component.literal("Dismissed tracked companions: " + dismissed), false);
         return Command.SINGLE_SUCCESS;
     }
 
@@ -1058,6 +1073,40 @@ public final class StayWithMeCommands {
                 false
         );
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static int companions(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        List<FriendEntity> companions = CompanionLifecycle.getActiveCompanions(player);
+        if (companions.isEmpty()) {
+            context.getSource().sendSuccess(() -> Component.literal("Active companions: none tracked."), false);
+            return Command.SINGLE_SUCCESS;
+        }
+
+        context.getSource().sendSuccess(
+                () -> Component.literal("Active companions: " + companions.size()),
+                false
+        );
+        for (FriendEntity companion : companions) {
+            context.getSource().sendSuccess(
+                    () -> Component.literal(activeCompanionSummary(player, companion)),
+                    false
+            );
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static String activeCompanionSummary(ServerPlayer player, FriendEntity companion) {
+        String uuid = companion.getUUID().toString();
+        String shortUuid = uuid.length() > 8 ? uuid.substring(0, 8) : uuid;
+        String dimension = companion.level().dimension().location().toString();
+        int distance = (int) Math.round(Math.sqrt(companion.distanceToSqr(player)));
+        return "- " + companion.getDisplayName().getString()
+                + " [" + shortUuid + "]"
+                + " state=" + companion.getFriendState().name()
+                + " distance=" + distance
+                + " dimension=" + dimension
+                + " task=" + companion.getTaskSummary();
     }
 
     private static String lastFailureSuffix(FriendEntity entity) {
